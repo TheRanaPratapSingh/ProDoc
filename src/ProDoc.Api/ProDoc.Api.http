@@ -1,0 +1,11 @@
+@ProDoc.Api_HostAddress = http://localhost:5080
+
+### Request a development sign-in code
+POST {{ProDoc.Api_HostAddress}}/api/v1/auth/otp/request
+Content-Type: application/json
+
+{
+  "phoneNumber": "9876543210"
+}
+
+###

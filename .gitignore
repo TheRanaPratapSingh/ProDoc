@@ -1,0 +1,38 @@
+## .NET
+bin/
+obj/
+.vs/
+*.user
+*.suo
+TestResults/
+*.DotSettings.user
+
+## Secrets
+appsettings.*.local.json
+secrets.json
+.env
+.env.*
+!.env.example
+apps/mobile/.env
+apps/mobile/.env.*
+!apps/mobile/.env.example
+
+## Private uploads
+App_Data/
+
+## Node / Expo
+node_modules/
+.expo/
+dist/
+web-build/
+npm-debug.log*
+yarn-error.log*
+.metro-health-check*
+
+## OS
+.DS_Store
+Thumbs.db
+
+## IDE
+.idea/
+*.swp

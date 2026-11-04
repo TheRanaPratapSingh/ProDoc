@@ -1,0 +1,39 @@
+# Local staging stack. Do not use for production patient data.
+services:
+  sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD}"
+    ports:
+      - "1433:1433"
+    volumes:
+      - prodoc_sql_data:/var/opt/mssql
+    healthcheck:
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$${MSSQL_SA_PASSWORD}" -C -Q "SELECT 1" || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Staging
+      ConnectionStrings__ProDoc: "Server=sql;Database=ProDoc;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True;Encrypt=True;Max Pool Size=100;Min Pool Size=5;MultipleActiveResultSets=true"
+      Auth__SigningKey: "${AUTH_SIGNING_KEY}"
+      Auth__OtpHashKey: "${AUTH_OTP_HASH_KEY}"
+      Auth__ExposeOtpInResponse: "false"
+      Cors__Origins__0: "${CORS_ORIGIN}"
+      Payments__Provider: Development
+      ProDoc__MigrateOnStartup: "true"
+    ports:
+      - "5080:8080"
+    depends_on:
+      sql:
+        condition: service_healthy
+
+volumes:
+  prodoc_sql_data:
