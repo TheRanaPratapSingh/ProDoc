@@ -3,14 +3,26 @@ import { useRouter, type Href } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, View } from 'react-native';
 
+import { DoctorShell } from '@/components/layout/doctor-shell';
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { ScreenHeader } from '@/components/layout/responsive-header';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Segmented } from '@/components/ui/segmented';
 import { AppText } from '@/components/ui/text';
 import { TextField } from '@/components/ui/text-field';
 import { pickFile } from '@/features/providers/pick-file';
+import { useFormFieldErrors } from '@/hooks/use-form-field-errors';
 import { useCopy, type Copy } from '@/i18n/copy';
+import {
+  doctorBasicsSchema,
+  doctorProfessionalSchema,
+  doctorRegistrationSchema,
+  emailOptionalSchema,
+  personNameSchema,
+  yearsOfExperienceSchema,
+} from '@/schemas/common';
 import {
   addQualification,
   getMyClinics,
@@ -25,24 +37,46 @@ import {
   uploadDoctorDocument,
   type DoctorProfile,
 } from '@/services/api/provider-api';
-import { useSessionStore } from '@/stores/session-store';
+import { notifyWarning } from '@/stores/feedback-store';
+import { useAccountPermissions, useSessionStore } from '@/stores/session-store';
 import { useProdocTheme } from '@/theme/prodoc-theme';
 import { spacing } from '@/theme/tokens';
+import { canCreateClinic } from '@/utils/admin-permissions';
 import { problemMessage } from '@/utils/problem';
+import { formatYearsExperience, parseYearsOfExperience } from '@/utils/years-of-experience';
 
 const steps = ['basics', 'professional', 'registration', 'documents', 'clinics', 'review'] as const;
 
 export function DoctorOnboarding() {
   const copy = useCopy();
+  const theme = useProdocTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
   const account = useSessionStore((state) => state.account);
+  const permissions = useAccountPermissions();
+  const allowCreateClinic = canCreateClinic(permissions);
   const doctorQuery = useQuery({ queryKey: ['doctor', 'me'], queryFn: getMyDoctor });
   const catalogQuery = useQuery({ queryKey: ['specializations'], queryFn: getSpecializations });
   const clinicsQuery = useQuery({ queryKey: ['clinics', 'mine'], queryFn: getMyClinics });
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string>();
   const [progress, setProgress] = useState<number>();
+  const fieldErrors = useFormFieldErrors<
+    | 'firstName'
+    | 'lastName'
+    | 'dateOfBirth'
+    | 'email'
+    | 'displayName'
+    | 'yearsOfExperience'
+    | 'qualification'
+    | 'institution'
+    | 'graduationYear'
+    | 'number'
+    | 'council'
+    | 'state'
+    | 'registeredOn'
+    | 'expiresOn'
+  >();
   const [form, setForm] = useState({
     firstName: '',
     lastName: '',
@@ -63,6 +97,10 @@ export function DoctorOnboarding() {
     selected: [] as string[],
     primary: '',
   });
+  const setField = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
+    fieldErrors.clearField(key as Parameters<typeof fieldErrors.clearField>[0]);
+    setForm((current) => ({ ...current, [key]: value }));
+  };
 
   useEffect(() => {
     const profile = doctorQuery.data;
@@ -88,7 +126,7 @@ export function DoctorOnboarding() {
       email: profile.email ?? '',
       displayName: profile.displayName ?? '',
       biography: profile.biography ?? '',
-      yearsOfExperience: profile.yearsOfExperience?.toString() ?? '',
+      yearsOfExperience: profile.yearsOfExperience != null ? String(profile.yearsOfExperience) : '',
       number: registration?.number ?? '',
       council: registration?.council ?? '',
       state: registration?.state ?? '',
@@ -111,7 +149,7 @@ export function DoctorOnboarding() {
         setStep((current) => Math.min(current + 1, steps.length - 1));
       }
     } catch (caught) {
-      setError(problemMessage(caught, copy.save));
+      setError(problemMessage(caught, copy.saveFailed));
     }
   };
 
@@ -120,19 +158,43 @@ export function DoctorOnboarding() {
   const titles = [copy.stepBasics, copy.stepProfessional, copy.stepRegistration, copy.stepDocuments, copy.stepClinics, copy.stepReview];
 
   return (
+    <DoctorShell active="profile">
     <AuthScaffold>
-      <Button label={copy.back} variant="secondary" onPress={() => (step === 0 ? router.back() : setStep((current) => current - 1))} />
-      <AppText variant="title">{copy.doctorTitle}</AppText>
-      <AppText variant="muted">{titles[step]}</AppText>
+      <ScreenHeader
+        title={copy.doctorTitle}
+        subtitle={titles[step]}
+        showBack
+        onBack={() => (step === 0 ? router.back() : setStep((current) => current - 1))}
+      />
       {profile ? <StatusBanner copy={copy} profile={profile} /> : null}
       {locked ? <AppText variant="muted">{copy.lockedNotice}</AppText> : null}
       <Card>
         {step === 0 ? (
           <View style={{ gap: spacing.md }}>
             <AppText variant="muted">{profile?.phoneNumber ?? account?.phoneNumber}</AppText>
-            <TextField label={copy.firstName} value={form.firstName} onChangeText={(firstName) => setForm({ ...form, firstName })} />
-            <TextField label={copy.lastName} value={form.lastName} onChangeText={(lastName) => setForm({ ...form, lastName })} />
-            <TextField label={copy.dateOfBirth} placeholder="1990-01-15" value={form.dateOfBirth} onChangeText={(dateOfBirth) => setForm({ ...form, dateOfBirth })} />
+            <TextField
+              label={copy.firstName}
+              required
+              value={form.firstName}
+              error={fieldErrors.errors.firstName}
+              onChangeText={(firstName) => setField('firstName', firstName)}
+              onBlur={() => fieldErrors.validateOnBlur('firstName', personNameSchema, form.firstName)}
+            />
+            <TextField
+              label={copy.lastName}
+              required
+              value={form.lastName}
+              error={fieldErrors.errors.lastName}
+              onChangeText={(lastName) => setField('lastName', lastName)}
+              onBlur={() => fieldErrors.validateOnBlur('lastName', personNameSchema, form.lastName)}
+            />
+            <TextField
+              label={copy.dateOfBirth}
+              placeholder="1990-01-15"
+              value={form.dateOfBirth}
+              error={fieldErrors.errors.dateOfBirth}
+              onChangeText={(dateOfBirth) => setField('dateOfBirth', dateOfBirth)}
+            />
             <AppText variant="label">{copy.gender}</AppText>
             <Segmented
               value={form.gender}
@@ -142,16 +204,43 @@ export function DoctorOnboarding() {
                 { value: 'other', label: copy.other },
                 { value: 'undisclosed', label: copy.undisclosed },
               ]}
-              onChange={(gender) => setForm({ ...form, gender })}
+              onChange={(gender) => setField('gender', gender)}
             />
-            <TextField label={copy.email} value={form.email} onChangeText={(email) => setForm({ ...form, email })} autoCapitalize="none" />
+            <TextField
+              label={copy.email}
+              value={form.email}
+              error={fieldErrors.errors.email}
+              onChangeText={(email) => setField('email', email)}
+              onBlur={() => fieldErrors.validateOnBlur('email', emailOptionalSchema, form.email)}
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
           </View>
         ) : null}
         {step === 1 ? (
           <View style={{ gap: spacing.md }}>
-            <TextField label={copy.displayName} value={form.displayName} onChangeText={(displayName) => setForm({ ...form, displayName })} />
-            <TextField label={copy.biography} value={form.biography} onChangeText={(biography) => setForm({ ...form, biography })} multiline />
-            <TextField label={copy.experience} value={form.yearsOfExperience} onChangeText={(yearsOfExperience) => setForm({ ...form, yearsOfExperience })} keyboardType="number-pad" />
+            <TextField
+              label={copy.displayName}
+              required
+              value={form.displayName}
+              error={fieldErrors.errors.displayName}
+              onChangeText={(displayName) => setField('displayName', displayName)}
+              onBlur={() => fieldErrors.validateOnBlur('displayName', personNameSchema, form.displayName)}
+            />
+            <TextField label={copy.biography} value={form.biography} onChangeText={(biography) => setField('biography', biography)} multiline />
+            <TextField
+              label={copy.experience}
+              required
+              value={form.yearsOfExperience}
+              error={fieldErrors.errors.yearsOfExperience}
+              onChangeText={(yearsOfExperience) =>
+                setField('yearsOfExperience', yearsOfExperience.replace(/[^\d]/g, '').slice(0, 2))
+              }
+              onBlur={() =>
+                fieldErrors.validateOnBlur('yearsOfExperience', yearsOfExperienceSchema, form.yearsOfExperience)
+              }
+              keyboardType="number-pad"
+            />
             {(catalogQuery.data ?? []).map((item) => {
               const selected = form.selected.includes(item.id);
               return (
@@ -160,7 +249,11 @@ export function DoctorOnboarding() {
                   accessibilityRole="button"
                   onPress={() => {
                     const selectedIds = selected ? form.selected.filter((id) => id !== item.id) : [...form.selected, item.id];
-                    setForm({ ...form, selected: selectedIds, primary: selectedIds.includes(form.primary) ? form.primary : selectedIds[0] ?? '' });
+                    setForm((current) => ({
+                      ...current,
+                      selected: selectedIds,
+                      primary: selectedIds.includes(current.primary) ? current.primary : selectedIds[0] ?? '',
+                    }));
                   }}>
                   <AppText>
                     {selected ? '● ' : '○ '}
@@ -170,9 +263,25 @@ export function DoctorOnboarding() {
                 </Pressable>
               );
             })}
-            <TextField label={copy.qualification} value={form.qualification} onChangeText={(qualification) => setForm({ ...form, qualification })} />
-            <TextField label={copy.institution} value={form.institution} onChangeText={(institution) => setForm({ ...form, institution })} />
-            <TextField label={copy.graduationYear} value={form.graduationYear} onChangeText={(graduationYear) => setForm({ ...form, graduationYear })} keyboardType="number-pad" />
+            <TextField
+              label={copy.qualification}
+              value={form.qualification}
+              error={fieldErrors.errors.qualification}
+              onChangeText={(qualification) => setField('qualification', qualification)}
+            />
+            <TextField
+              label={copy.institution}
+              value={form.institution}
+              error={fieldErrors.errors.institution}
+              onChangeText={(institution) => setField('institution', institution)}
+            />
+            <TextField
+              label={copy.graduationYear}
+              value={form.graduationYear}
+              error={fieldErrors.errors.graduationYear}
+              onChangeText={(graduationYear) => setField('graduationYear', graduationYear)}
+              keyboardType="number-pad"
+            />
             {(profile?.qualifications ?? []).map((item) => (
               <AppText key={item.id} variant="muted">{item.name} · {item.institution} · {item.graduationYear}</AppText>
             ))}
@@ -181,11 +290,42 @@ export function DoctorOnboarding() {
         {step === 2 ? (
           <View style={{ gap: spacing.md }}>
             <AppText variant="muted">{copy.credentialNotice}</AppText>
-            <TextField label={copy.registrationNumber} value={form.number} onChangeText={(number) => setForm({ ...form, number })} />
-            <TextField label={copy.council} value={form.council} onChangeText={(council) => setForm({ ...form, council })} />
-            <TextField label={copy.state} value={form.state} onChangeText={(state) => setForm({ ...form, state })} />
-            <TextField label={copy.registeredOn} placeholder="2014-05-01" value={form.registeredOn} onChangeText={(registeredOn) => setForm({ ...form, registeredOn })} />
-            <TextField label={copy.expiresOn} placeholder="2030-05-01" value={form.expiresOn} onChangeText={(expiresOn) => setForm({ ...form, expiresOn })} />
+            <TextField
+              label={copy.registrationNumber}
+              required
+              value={form.number}
+              error={fieldErrors.errors.number}
+              onChangeText={(number) => setField('number', number)}
+            />
+            <TextField
+              label={copy.council}
+              required
+              value={form.council}
+              error={fieldErrors.errors.council}
+              onChangeText={(council) => setField('council', council)}
+            />
+            <TextField
+              label={copy.state}
+              required
+              value={form.state}
+              error={fieldErrors.errors.state}
+              onChangeText={(state) => setField('state', state)}
+            />
+            <TextField
+              label={copy.registeredOn}
+              required
+              placeholder="2014-05-01"
+              value={form.registeredOn}
+              error={fieldErrors.errors.registeredOn}
+              onChangeText={(registeredOn) => setField('registeredOn', registeredOn)}
+            />
+            <TextField
+              label={copy.expiresOn}
+              placeholder="2030-05-01"
+              value={form.expiresOn}
+              error={fieldErrors.errors.expiresOn}
+              onChangeText={(expiresOn) => setField('expiresOn', expiresOn)}
+            />
           </View>
         ) : null}
         {step === 3 ? (
@@ -215,7 +355,9 @@ export function DoctorOnboarding() {
             {(profile?.affiliations ?? []).map((item) => (
               <AppText key={item.id} variant="muted">{item.clinicName} · {item.clinicStatus}</AppText>
             ))}
-            <Button label={copy.createClinic} variant="secondary" onPress={() => router.push('/clinic' as Href)} />
+            {allowCreateClinic ? (
+              <Button label={copy.createClinic} variant="secondary" onPress={() => router.push('/clinic' as Href)} />
+            ) : null}
             <Button label={copy.skipClinic} variant="secondary" onPress={() => setStep(5)} />
           </View>
         ) : null}
@@ -223,13 +365,17 @@ export function DoctorOnboarding() {
           <View style={{ gap: spacing.sm }}>
             <AppText>{profile.displayName}</AppText>
             <AppText variant="muted">{profile.specializations.map((item) => item.name).join(', ')}</AppText>
-            <AppText variant="muted">{profile.yearsOfExperience ?? 0}</AppText>
+            <AppText variant="muted">{formatYearsExperience(profile.yearsOfExperience, copy.yearsExp)}</AppText>
             <AppText variant="muted">{profile.biography}</AppText>
             <AppText variant="muted">{profile.registrations.find((item) => item.isCurrent)?.number}</AppText>
             {profile.rejectionReason ? <AppText variant="muted">{profile.rejectionReason}</AppText> : null}
           </View>
         ) : null}
-        {error ? <AppText variant="muted">{error}</AppText> : null}
+        {error ? (
+          <AppText variant="muted" style={{ color: theme.colors.error }}>
+            {error}
+          </AppText>
+        ) : null}
         {step < 4 ? (
           <Button label={copy.saveAndContinue} disabled={locked} onPress={() => void saveStep()} />
         ) : null}
@@ -238,38 +384,69 @@ export function DoctorOnboarding() {
         ) : null}
       </Card>
     </AuthScaffold>
+    </DoctorShell>
   );
 
   async function saveStep() {
     if (step === 0) {
-      await run(() => saveDoctorBasics({
+      const basics = fieldErrors.validateObject(doctorBasicsSchema, {
         firstName: form.firstName,
         lastName: form.lastName,
         dateOfBirth: form.dateOfBirth,
-        gender: form.gender,
         email: form.email,
+      });
+      if (!basics.ok) {
+        setError(basics.message);
+        notifyWarning(basics.message);
+        return;
+      }
+      await run(() => saveDoctorBasics({
+        firstName: basics.data.firstName,
+        lastName: basics.data.lastName,
+        dateOfBirth: basics.data.dateOfBirth || '',
+        gender: form.gender,
+        email: basics.data.email || '',
         preferredLanguage: account?.preferredLanguage ?? 'en',
       }));
       return;
     }
 
     if (step === 1) {
+      const professional = fieldErrors.validateObject(doctorProfessionalSchema, {
+        displayName: form.displayName,
+        yearsOfExperience: form.yearsOfExperience,
+        qualification: form.qualification,
+        institution: form.institution,
+        graduationYear: form.graduationYear,
+      });
+      if (!professional.ok) {
+        setError(professional.message);
+        notifyWarning(professional.message);
+        return;
+      }
+      const experience = parseYearsOfExperience(professional.data.yearsOfExperience);
+      if (experience == null) {
+        fieldErrors.setFieldError('yearsOfExperience', copy.yearsExperienceRequired);
+        setError(copy.yearsExperienceRequired);
+        notifyWarning(copy.yearsExperienceRequired);
+        return;
+      }
       await run(async () => {
         let next = await saveDoctorProfessional({
-          displayName: form.displayName,
+          displayName: professional.data.displayName,
           biography: form.biography,
-          yearsOfExperience: Number(form.yearsOfExperience),
+          yearsOfExperience: experience,
           languages: ['en', 'hi'],
           expertise: [],
         });
         if (form.primary) {
           next = await setSpecializations(form.selected, form.primary);
         }
-        if (form.qualification && form.graduationYear) {
+        if (professional.data.qualification && professional.data.graduationYear) {
           next = await addQualification({
-            name: form.qualification,
-            institution: form.institution,
-            graduationYear: Number(form.graduationYear),
+            name: professional.data.qualification,
+            institution: professional.data.institution,
+            graduationYear: Number(professional.data.graduationYear),
           });
         }
         return next;
@@ -277,14 +454,35 @@ export function DoctorOnboarding() {
       return;
     }
 
-    await run(() => saveRegistration({
-      number: form.number,
-      council: form.council,
-      state: form.state,
-      registrationType: 'permanent',
-      registeredOn: form.registeredOn,
-      expiresOn: form.expiresOn || null,
-    }));
+    if (step === 2) {
+      const registration = fieldErrors.validateObject(doctorRegistrationSchema, {
+        number: form.number,
+        council: form.council,
+        state: form.state,
+        registeredOn: form.registeredOn,
+        expiresOn: form.expiresOn,
+      });
+      if (!registration.ok) {
+        setError(registration.message);
+        notifyWarning(registration.message);
+        return;
+      }
+      await run(() =>
+        saveRegistration({
+          number: registration.data.number,
+          council: registration.data.council,
+          state: registration.data.state,
+          registrationType: 'permanent',
+          registeredOn: registration.data.registeredOn,
+          expiresOn: registration.data.expiresOn || null,
+        }),
+      );
+      return;
+    }
+
+    if (step === 3) {
+      setStep(4);
+    }
   }
 
   async function upload(category: string, accept: string) {
@@ -313,10 +511,25 @@ function StatusBanner({ copy, profile }: { copy: Copy; profile: DoctorProfile })
     Expired: copy.statusExpired,
   };
 
+  const badge =
+    profile.verificationBadge === 'Verified'
+      ? copy.doctorVerifiedBadge
+      : profile.verificationBadge === 'Rejected'
+        ? copy.doctorRejectedBadge
+        : copy.doctorPendingBadge;
+  const tone =
+    profile.verificationBadge === 'Verified' ? 'success' : profile.verificationBadge === 'Rejected' ? 'error' : 'warning';
+
   return (
     <View style={{ gap: spacing.xs }}>
       <AppText variant="label">{copy.verificationStatus}</AppText>
-      <AppText style={{ color: profile.isPubliclyBookable ? theme.colors.success : theme.colors.text }}>{labels[profile.status] ?? profile.status}</AppText>
+      <StatusBadge label={badge} tone={tone} />
+      <AppText style={{ color: profile.isPubliclyBookable ? theme.colors.success : theme.colors.text }}>
+        {labels[profile.status] ?? profile.status}
+      </AppText>
+      <AppText variant="muted">
+        {copy.doctorProfileCompletion}: {profile.profileCompletionPercent ?? 0}%
+      </AppText>
       <AppText variant="muted">{copy.applicationReference}: {profile.reference}</AppText>
     </View>
   );

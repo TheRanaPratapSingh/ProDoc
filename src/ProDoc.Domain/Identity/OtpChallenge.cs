@@ -75,7 +75,7 @@ public sealed class OtpChallenge
     {
         if (!IsActive(now))
         {
-            throw DomainException.Validation("otp_invalid", "The code is invalid or has expired.");
+            throw DomainException.Validation("otp_invalid", "Incorrect OTP. Please try again.");
         }
 
         ConsumedAtUtc = now;

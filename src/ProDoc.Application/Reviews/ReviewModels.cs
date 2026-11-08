@@ -9,7 +9,8 @@ public sealed record RatingSummary(
     decimal? AverageCommunication,
     decimal? AverageCleanliness,
     decimal? AverageStaffBehaviour,
-    decimal? AverageWaitingTime);
+    decimal? AverageWaitingTime,
+    decimal? AverageConsultation = null);
 
 public sealed record RatingBucket(int Stars, int Count);
 
@@ -27,7 +28,7 @@ public sealed record ReviewDetails(
     string TargetKind,
     Guid? DoctorId,
     Guid? ClinicId,
-    int OverallRating,
+    int? OverallRating,
     int? CommunicationRating,
     int? CleanlinessRating,
     int? StaffBehaviourRating,
@@ -38,7 +39,11 @@ public sealed record ReviewDetails(
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? EditedAtUtc,
     bool CanEdit,
-    IReadOnlyList<ReviewResponseDetails> Responses);
+    IReadOnlyList<ReviewResponseDetails> Responses,
+    int? ConsultationRating = null,
+    string? AuthorDisplayName = null,
+    DateTimeOffset? AppointmentCompletedAtUtc = null,
+    bool CanDelete = false);
 
 public sealed record EligibleReviewTarget(
     Guid AppointmentId,
@@ -57,7 +62,7 @@ public sealed record ReviewModerationItem(
     string TargetKind,
     Guid? DoctorId,
     Guid? ClinicId,
-    int OverallRating,
+    int? OverallRating,
     string? Body,
     string Status,
     int OpenReportCount,

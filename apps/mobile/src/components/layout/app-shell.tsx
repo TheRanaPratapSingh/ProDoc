@@ -1,15 +1,21 @@
 import { useRouter, type Href } from 'expo-router';
-import { type ReactNode } from 'react';
+import { type ReactNode, useCallback } from 'react';
 import { Pressable, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import {
+  IconAppointments,
+  IconHome,
+  IconProfile,
+  IconRecords,
+} from '@/components/ui/prodoc-icons';
 import { AppText } from '@/components/ui/text';
 import { useCopy } from '@/i18n/copy';
-import { useSessionStore } from '@/stores/session-store';
+import { useHasPermission } from '@/stores/session-store';
 import { useProdocTheme } from '@/theme/prodoc-theme';
 import { breakpoint, spacing } from '@/theme/tokens';
 
-export type PatientTab = 'home' | 'doctors' | 'visits' | 'queue' | 'records';
+export type PatientTab = 'home' | 'visits' | 'records' | 'profile' | 'doctors';
 
 export function AppShell({
   children,
@@ -23,18 +29,47 @@ export function AppShell({
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const permissions = useSessionStore((state) => state.account?.permissions ?? []);
-  const canBook = permissions.includes('appointments.book.self');
+  const canBook = useHasPermission('appointments.book.self');
   const wide = width >= breakpoint.wide;
 
-  const tabs: { id: PatientTab; label: string; href: Href; visible: boolean }[] = [
-    { id: 'home', label: copy.homeTitle, href: '/home', visible: true },
-    { id: 'doctors', label: copy.findDoctor, href: '/doctors', visible: true },
-    { id: 'visits', label: copy.myVisits, href: '/visits', visible: canBook },
-    { id: 'queue', label: copy.myQueue, href: '/queue', visible: canBook },
-    { id: 'records', label: copy.healthRecords, href: '/health-records', visible: canBook },
+  const tabs: {
+    id: Exclude<PatientTab, 'doctors'>;
+    label: string;
+    href: Href;
+    visible: boolean;
+  }[] = [
+    { id: 'home', label: copy.navHome, href: '/home', visible: true },
+    { id: 'visits', label: copy.navAppointments, href: '/visits', visible: canBook },
+    { id: 'records', label: copy.navRecords, href: '/health-records', visible: true },
+    { id: 'profile', label: copy.navProfile, href: '/home?tab=profile', visible: true },
   ];
   const visible = tabs.filter((tab) => tab.visible);
+  const selectedId = active === 'doctors' ? 'home' : active;
+
+  /** Skip no-op taps; use navigate so returning to a prior tab can reuse stack history. */
+  const onSelectTab = useCallback(
+    (tabId: Exclude<PatientTab, 'doctors'>, href: Href) => {
+      if (tabId === selectedId) {
+        return;
+      }
+      router.navigate(href);
+    },
+    [router, selectedId],
+  );
+
+  const renderIcon = (id: Exclude<PatientTab, 'doctors'>, selected: boolean) => {
+    const color = selected ? theme.colors.primary : theme.colors.textMuted;
+    switch (id) {
+      case 'home':
+        return <IconHome size={22} color={color} filled={selected} />;
+      case 'visits':
+        return <IconAppointments size={22} color={color} />;
+      case 'records':
+        return <IconRecords size={22} color={color} />;
+      case 'profile':
+        return <IconProfile size={22} color={color} />;
+    }
+  };
 
   if (wide) {
     return (
@@ -53,18 +88,22 @@ export function AppShell({
             {copy.brand}
           </AppText>
           {visible.map((tab) => {
-            const selected = tab.id === active;
+            const selected = tab.id === selectedId;
             return (
               <Pressable
                 key={tab.id}
-                onPress={() => router.push(tab.href)}
+                onPress={() => onSelectTab(tab.id, tab.href)}
                 style={{
                   paddingVertical: spacing.md,
                   paddingHorizontal: spacing.lg,
                   borderRadius: 14,
-                  backgroundColor: selected ? theme.colors.primary : 'transparent',
+                  backgroundColor: selected ? theme.colors.primaryLight : 'transparent',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: spacing.sm,
                 }}>
-                <AppText variant="label" style={{ color: selected ? theme.colors.onPrimary : theme.colors.text }}>
+                {renderIcon(tab.id, selected)}
+                <AppText variant="label" style={{ color: selected ? theme.colors.primary : theme.colors.text }}>
                   {tab.label}
                 </AppText>
               </Pressable>
@@ -85,27 +124,28 @@ export function AppShell({
           borderTopWidth: 1,
           borderTopColor: theme.colors.border,
           backgroundColor: theme.colors.surface,
-          paddingBottom: Math.max(insets.bottom, spacing.sm),
-          paddingTop: spacing.sm,
+          paddingBottom: Math.max(insets.bottom, 8),
+          paddingTop: 10,
+          minHeight: 56 + Math.max(insets.bottom, 8),
         }}>
         {visible.map((tab) => {
-          const selected = tab.id === active;
+          const selected = tab.id === selectedId;
           return (
             <Pressable
               key={tab.id}
-              onPress={() => router.push(tab.href)}
-              style={{ flex: 1, alignItems: 'center', gap: 4, paddingVertical: spacing.sm }}>
-              <View
-                style={{
-                  width: 28,
-                  height: 4,
-                  borderRadius: 999,
-                  backgroundColor: selected ? theme.colors.primary : 'transparent',
-                }}
-              />
+              accessibilityRole="button"
+              accessibilityState={{ selected }}
+              onPress={() => onSelectTab(tab.id, tab.href)}
+              style={{ flex: 1, alignItems: 'center', gap: 4, paddingVertical: 4 }}>
+              {renderIcon(tab.id, selected)}
               <AppText
                 variant="caption"
-                style={{ color: selected ? theme.colors.primary : theme.colors.textMuted, textAlign: 'center' }}>
+                style={{
+                  color: selected ? theme.colors.primary : theme.colors.textMuted,
+                  textAlign: 'center',
+                  fontSize: 11,
+                  lineHeight: 14,
+                }}>
                 {tab.label}
               </AppText>
             </Pressable>

@@ -43,7 +43,7 @@ export function Button({
   }[variant];
 
   return (
-    <Animated.View style={animated}>
+    <Animated.View style={[animated, style]}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={label}
@@ -61,20 +61,18 @@ export function Button({
           setPressed(false);
           scale.value = withTiming(1, { duration: duration.press });
         }}
-        style={[
-          {
-            minHeight: control.height,
-            borderRadius: radius.md,
-            alignItems: 'center',
-            justifyContent: 'center',
-            paddingHorizontal: 18,
-            backgroundColor: background,
-            borderWidth: variant === 'secondary' || variant === 'ghost' ? 1 : 0,
-            borderColor: variant === 'ghost' ? 'transparent' : theme.colors.border,
-            opacity: inactive ? 0.55 : 1,
-          },
-          style,
-        ]}
+        style={{
+          width: '100%',
+          minHeight: control.height,
+          borderRadius: radius.md,
+          alignItems: 'center',
+          justifyContent: 'center',
+          paddingHorizontal: 18,
+          backgroundColor: background,
+          borderWidth: variant === 'secondary' || variant === 'ghost' ? 1 : 0,
+          borderColor: variant === 'ghost' ? 'transparent' : theme.colors.border,
+          opacity: inactive ? 0.55 : 1,
+        }}
         {...props}>
         {loading ? (
           <ActivityIndicator color={foreground} />

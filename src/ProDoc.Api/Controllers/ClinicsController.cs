@@ -18,10 +18,11 @@ public sealed class ClinicsController(ClinicOnboardingService clinics, ProviderD
     public async Task<ActionResult<IReadOnlyList<ClinicProfile>>> Mine(CancellationToken cancellationToken) =>
         Ok(await clinics.ListMineAsync(User.GetUserId(), cancellationToken));
 
-    [HasPermission(PermissionCodes.ProviderOnboard)]
+    /// <summary>Create a clinic. Super Admin only (<see cref="PermissionCodes.ClinicCreate"/>).</summary>
+    [HasPermission(PermissionCodes.ClinicCreate)]
     [HttpPost]
-    public async Task<ActionResult<ClinicProfile>> Create(CancellationToken cancellationToken) =>
-        Ok(await clinics.CreateAsync(User.GetUserId(), cancellationToken));
+    public async Task<ActionResult<ClinicProfile>> Create([FromBody] CreateClinicRequest? request, CancellationToken cancellationToken) =>
+        Ok(await clinics.CreateAsync(User.GetUserId(), request?.OwnerUserId, cancellationToken));
 
     [HasPermission(PermissionCodes.ProviderOnboard)]
     [HttpPut("{clinicId:guid}")]
@@ -59,7 +60,12 @@ public sealed class ClinicsController(ClinicOnboardingService clinics, ProviderD
             request.Longitude,
             request.PhoneNumber,
             request.IsPrimary,
-            cancellationToken));
+            cancellationToken,
+            request.Landmark,
+            request.Locality,
+            request.District,
+            request.Country,
+            request.GooglePlaceId));
 
     [HasPermission(PermissionCodes.ProviderOnboard)]
     [HttpPut("{clinicId:guid}/branches/{branchId:guid}")]
@@ -82,7 +88,12 @@ public sealed class ClinicsController(ClinicOnboardingService clinics, ProviderD
             request.Longitude,
             request.PhoneNumber,
             request.IsPrimary,
-            cancellationToken));
+            cancellationToken,
+            request.Landmark,
+            request.Locality,
+            request.District,
+            request.Country,
+            request.GooglePlaceId));
 
     [HasPermission(PermissionCodes.ProviderOnboard)]
     [HttpPost("{clinicId:guid}/documents")]
@@ -149,3 +160,5 @@ public sealed class ClinicsController(ClinicOnboardingService clinics, ProviderD
         return parsed;
     }
 }
+
+public sealed record CreateClinicRequest(Guid? OwnerUserId);

@@ -1,7 +1,8 @@
 import { type ReactNode } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, useWindowDimensions, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useWindowDimensions, View } from 'react-native';
+import { SafeAreaView, type Edge } from 'react-native-safe-area-context';
 
+import { FormScreenScroll } from '@/components/layout/keyboard-aware-form';
 import { NetworkBanner } from '@/components/layout/network-banner';
 import { HealthcareHero } from '@/components/ui/healthcare-hero';
 import { AppText } from '@/components/ui/text';
@@ -9,18 +10,21 @@ import { useCopy } from '@/i18n/copy';
 import { useProdocTheme } from '@/theme/prodoc-theme';
 import { breakpoint, spacing } from '@/theme/tokens';
 
-export function Screen({ children }: { children: ReactNode }) {
+export function Screen({
+  children,
+  edges = ['top', 'left', 'right'],
+}: {
+  children: ReactNode;
+  /** Default excludes bottom so AppShell tab bar owns the home-indicator inset. */
+  edges?: Edge[];
+}) {
   const theme = useProdocTheme();
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }} edges={edges}>
       <NetworkBanner />
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}>
-        {children}
-      </KeyboardAvoidingView>
+      {/* Keyboard avoidance lives in FormScreenScroll / KeyboardAwareForm — avoid nesting avoiders here. */}
+      <View style={{ flex: 1 }}>{children}</View>
     </SafeAreaView>
   );
 }
@@ -40,21 +44,21 @@ export function AuthScaffold({
   if (!wide) {
     return (
       <Screen>
-        <ScrollView
+        <FormScreenScroll
           contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: spacing.xl }}
-          keyboardShouldPersistTaps="handled">
+          mode="layout">
           <View style={{ width: '100%', maxWidth: 440, alignSelf: 'center', gap: spacing.xl }}>
             {showHero ? (
               <View style={{ gap: spacing.md, alignItems: 'center' }}>
                 <AppText variant="headline" style={{ color: theme.colors.primary }}>
                   {copy.brand}
                 </AppText>
-                <HealthcareHero height={150} />
+                <HealthcareHero height={132} variant="illustration" />
               </View>
             ) : null}
             {children}
           </View>
-        </ScrollView>
+        </FormScreenScroll>
       </Screen>
     );
   }
@@ -74,14 +78,14 @@ export function AuthScaffold({
         </AppText>
         <AppText variant="title">{copy.loginHeadline}</AppText>
         <AppText variant="muted">{copy.loginSubtitle}</AppText>
-        <HealthcareHero height={220} />
+        <HealthcareHero height={200} variant="illustration" />
       </View>
       <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }}>
-        <ScrollView
+        <FormScreenScroll
           contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: spacing.xxxl }}
-          keyboardShouldPersistTaps="handled">
+          mode="layout">
           <View style={{ width: '100%', maxWidth: 440, alignSelf: 'center' }}>{children}</View>
-        </ScrollView>
+        </FormScreenScroll>
       </SafeAreaView>
     </View>
   );

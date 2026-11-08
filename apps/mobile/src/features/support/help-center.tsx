@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AppText } from '@/components/ui/text';
@@ -43,8 +44,7 @@ export function HelpCenter() {
 
   return (
     <AuthScaffold>
-      <Button label={copy.back} variant="secondary" onPress={() => router.back()} />
-      <AppText variant="title">{copy.helpCenterTitle}</AppText>
+      <ScreenHeader title={copy.helpCenterTitle} />
       <AppText variant="muted">{copy.helpCenterBody}</AppText>
       <Card>
         <TextField label={copy.helpSearch} value={query} onChangeText={setQuery} placeholder={copy.helpSearchPlaceholder} />

@@ -34,6 +34,17 @@ public sealed class HelpArticleConfiguration : IEntityTypeConfiguration<HelpArti
     }
 }
 
+public sealed class HelpArticleFeedbackConfiguration : IEntityTypeConfiguration<HelpArticleFeedback>
+{
+    public void Configure(EntityTypeBuilder<HelpArticleFeedback> builder)
+    {
+        builder.ToTable("HelpArticleFeedback");
+        builder.HasKey(x => x.Id);
+        builder.HasIndex(x => x.ArticleId);
+        builder.HasIndex(x => new { x.ArticleId, x.UserId });
+    }
+}
+
 public sealed class SupportAttachmentConfiguration : IEntityTypeConfiguration<SupportAttachment>
 {
     public void Configure(EntityTypeBuilder<SupportAttachment> builder)

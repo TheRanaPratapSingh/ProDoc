@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
 import { useState } from 'react';
 
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AppText } from '@/components/ui/text';
@@ -13,7 +13,6 @@ import { problemMessage } from '@/utils/problem';
 
 export function ReviewQueue() {
   const copy = useCopy();
-  const router = useRouter();
   const queryClient = useQueryClient();
   const queue = useQuery({ queryKey: ['verifications'], queryFn: getReviewQueue });
   const [reason, setReason] = useState('');
@@ -29,8 +28,7 @@ export function ReviewQueue() {
 
   return (
     <AuthScaffold>
-      <Button label={copy.back} variant="secondary" onPress={() => router.back()} />
-      <AppText variant="title">{copy.reviewTitle}</AppText>
+      <ScreenHeader title={copy.reviewTitle} />
       <Card>
         <TextField label={copy.reason} value={reason} onChangeText={setReason} />
         {(queue.data ?? []).map((item) => (

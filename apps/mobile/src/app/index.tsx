@@ -1,26 +1,33 @@
-import { useRouter } from 'expo-router';
-import { useEffect } from 'react';
+import { useRouter, type Href } from 'expo-router';
+import { useEffect, useRef } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
-import { AppText } from '@/components/ui/text';
-import { useCopy } from '@/i18n/copy';
 import { useSessionStore } from '@/stores/session-store';
-import { useProdocTheme } from '@/theme/prodoc-theme';
+import { splashPalette } from '@/theme/tokens';
+import { homeHrefForAccount } from '@/utils/home-surface';
 
+/** Silent role-based redirect — Earth Green only, no white loading chrome. */
 export default function IndexScreen() {
   const router = useRouter();
-  const theme = useProdocTheme();
-  const copy = useCopy();
   const hydrated = useSessionStore((state) => state.hydrated);
   const accessToken = useSessionStore((state) => state.accessToken);
+  const account = useSessionStore((state) => state.account);
+  const activeSurface = useSessionStore((state) => state.activeSurface);
+  const redirected = useRef<string | null>(null);
 
   useEffect(() => {
     if (!hydrated) {
       return;
     }
 
-    router.replace(accessToken ? '/home' : '/sign-in');
-  }, [accessToken, hydrated, router]);
+    const target = (accessToken ? homeHrefForAccount(account, activeSurface) : '/sign-in') as Href;
+    const key = String(target);
+    if (redirected.current === key) {
+      return;
+    }
+    redirected.current = key;
+    router.replace(target);
+  }, [accessToken, account, activeSurface, hydrated, router]);
 
   return (
     <View
@@ -28,11 +35,9 @@ export default function IndexScreen() {
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 12,
-        backgroundColor: theme.colors.background,
+        backgroundColor: splashPalette.deep,
       }}>
-      <ActivityIndicator color={theme.colors.primary} />
-      <AppText variant="muted">{copy.loading}</AppText>
+      <ActivityIndicator color={splashPalette.mint} />
     </View>
   );
 }

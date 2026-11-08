@@ -15,6 +15,7 @@ public sealed class EnterpriseFlowTests(ProDocApiFactory factory)
     {
         var owner = await SignInAsync("9000000131");
         var outsider = await SignInAsync("9000000132");
+        var admin = await SignInAsync("9000000001", purpose: "admin");
         await SendAsync(HttpMethod.Put, "/api/v1/account/profile", owner.AccessToken, JsonContent.Create(new
         {
             fullName = "Org Owner",
@@ -32,8 +33,8 @@ public sealed class EnterpriseFlowTests(ProDocApiFactory factory)
         var mine = await ReadArrayAsync(await SendAsync(HttpMethod.Get, "/api/v1/organizations", owner.AccessToken));
         Assert.Contains(mine, item => item.GetProperty("id").GetGuid() == organizationId);
 
-        var clinic = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/clinics", owner.AccessToken));
-        var clinicId = clinic.GetProperty("id").GetGuid();
+        var ownerUserId = await ProviderSeed.GetUserIdAsync(_client, owner.AccessToken);
+        var clinicId = await ProviderSeed.CreateClinicOwnedByAsync(_client, admin.AccessToken, ownerUserId);
         await SendAsync(HttpMethod.Put, $"/api/v1/clinics/{clinicId}", owner.AccessToken, JsonContent.Create(new
         {
             name = "Metro Clinic",
@@ -98,9 +99,9 @@ public sealed class EnterpriseFlowTests(ProDocApiFactory factory)
         Assert.Contains(settings, item => item.GetProperty("key").GetString() == "appointments.patient_change_hours");
     }
 
-    private async Task<SessionBody> SignInAsync(string phone)
+    private async Task<SessionBody> SignInAsync(string phone, string? purpose = null)
     {
-        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone });
+        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone, purpose });
         var otpBody = await otpResponse.Content.ReadAsStringAsync();
         Assert.True(otpResponse.IsSuccessStatusCode, otpBody);
         var otp = JsonSerializer.Deserialize<OtpBody>(otpBody, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -108,7 +109,8 @@ public sealed class EnterpriseFlowTests(ProDocApiFactory factory)
         {
             phoneNumber = phone,
             code = otp!.DevelopmentCode,
-            deviceName = "integration-test"
+            deviceName = "integration-test",
+            purpose
         });
         var verifyBody = await verifyResponse.Content.ReadAsStringAsync();
         Assert.True(verifyResponse.IsSuccessStatusCode, verifyBody);

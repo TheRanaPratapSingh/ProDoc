@@ -41,9 +41,19 @@ export function attachQueryPersistence(client: QueryClient) {
         status: row.status,
         startsAtUtc: row.startsAtUtc,
         endsAtUtc: row.endsAtUtc,
+        timeZoneId: row.timeZoneId,
         doctorName: row.doctorName,
+        doctorSpecialization: row.doctorSpecialization,
+        doctorVerified: row.doctorVerified,
+        patientName: row.patientName,
         clinicName: row.clinicName,
         branchName: row.branchName,
+        reference: row.reference,
+        tokenLabel: row.tokenLabel,
+        tokenNumber: row.tokenNumber,
+        consultationFee: row.consultationFee,
+        paymentMethod: row.paymentMethod,
+        paymentStatus: row.paymentStatus,
       }));
       void persistQuerySnapshot(key, 'appointmentsMine', safe);
     }

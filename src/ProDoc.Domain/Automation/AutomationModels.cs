@@ -25,7 +25,9 @@ public static class AutomationTriggerTypes
     public const string AppointmentCreated = "appointment.created";
     public const string AppointmentConfirmed = "appointment.confirmed";
     public const string AppointmentCancelled = "appointment.cancelled";
+    public const string AppointmentRescheduled = "appointment.rescheduled";
     public const string AppointmentReminderDue = "appointment.reminder_due";
+    public const string FollowUpReminderDue = "clinical.follow_up_reminder_due";
     public const string PatientCheckedIn = "appointment.checked_in";
     public const string QueuePositionChanged = "queue.position_changed";
     public const string PrescriptionFinalized = "clinical.prescription_finalized";
@@ -34,13 +36,16 @@ public static class AutomationTriggerTypes
     public const string SubscriptionRenewalApproaching = "saas.subscription_renewal_approaching";
     public const string SupportTicketStatusChanged = "support.ticket_status_changed";
     public const string DoctorRegistrationExpiring = "provider.registration_expiring";
+    public const string ScheduleAvailabilityChanged = "schedule.availability_changed";
 
     public static IReadOnlyList<string> Catalog { get; } =
     [
         AppointmentCreated,
         AppointmentConfirmed,
         AppointmentCancelled,
+        AppointmentRescheduled,
         AppointmentReminderDue,
+        FollowUpReminderDue,
         PatientCheckedIn,
         QueuePositionChanged,
         PrescriptionFinalized,
@@ -48,7 +53,8 @@ public static class AutomationTriggerTypes
         PaymentFailed,
         SubscriptionRenewalApproaching,
         SupportTicketStatusChanged,
-        DoctorRegistrationExpiring
+        DoctorRegistrationExpiring,
+        ScheduleAvailabilityChanged
     ];
 }
 

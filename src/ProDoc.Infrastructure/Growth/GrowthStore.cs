@@ -1,3 +1,4 @@
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using ProDoc.Application.Growth;
 using ProDoc.Domain.Appointments;
@@ -37,6 +38,22 @@ public sealed class GrowthStore(ProDocDbContext db) : IGrowthStore
             .Take(take)
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyDictionary<Guid, string>> FindPatientDisplayNamesAsync(
+        IReadOnlyList<Guid> userIds,
+        CancellationToken cancellationToken)
+    {
+        if (userIds.Count == 0)
+        {
+            return new Dictionary<Guid, string>();
+        }
+
+        var rows = await db.Patients.AsNoTracking()
+            .Where(item => userIds.Contains(item.UserId))
+            .Select(item => new { item.UserId, item.FullName })
+            .ToListAsync(cancellationToken);
+        return rows.ToDictionary(item => item.UserId, item => item.FullName ?? string.Empty);
+    }
+
     public Task<int> CountReferralRewardsTodayAsync(Guid referrerUserId, DateTimeOffset dayStartUtc, CancellationToken cancellationToken) =>
         db.ReferralRelationships.AsNoTracking()
             .CountAsync(
@@ -54,6 +71,99 @@ public sealed class GrowthStore(ProDocDbContext db) : IGrowthStore
     }
 
     public void AddRewardAccount(RewardAccount account) => db.RewardAccounts.Add(account);
+
+    public async Task<RewardAccount> GetOrCreateRewardAccountAsync(
+        Guid userId,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var existing = await FindRewardAccountAsync(userId, tracking: true, cancellationToken);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var created = RewardAccount.Create(userId, now);
+        db.RewardAccounts.Add(created);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+            return created;
+        }
+        catch (DbUpdateException exception) when (IsUniqueViolation(exception))
+        {
+            db.Entry(created).State = EntityState.Detached;
+            var recovered = await FindRewardAccountAsync(userId, tracking: true, cancellationToken);
+            if (recovered is null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception).Throw();
+            }
+
+            return recovered;
+        }
+    }
+
+    public async Task<ReferralCode> GetOrCreateReferralCodeAsync(
+        Guid userId,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var existing = await FindReferralCodeByUserAsync(userId, tracking: true, cancellationToken);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var created = ReferralCode.Create(userId, now);
+        db.ReferralCodes.Add(created);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+            return created;
+        }
+        catch (DbUpdateException exception) when (IsUniqueViolation(exception))
+        {
+            db.Entry(created).State = EntityState.Detached;
+            var recovered = await FindReferralCodeByUserAsync(userId, tracking: true, cancellationToken);
+            if (recovered is null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception).Throw();
+            }
+
+            return recovered;
+        }
+    }
+
+    public async Task<MarketingConsent> GetOrCreateConsentAsync(
+        Guid userId,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var existing = await FindConsentAsync(userId, tracking: true, cancellationToken);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
+        var created = MarketingConsent.Create(userId, false, now);
+        db.MarketingConsents.Add(created);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+            return created;
+        }
+        catch (DbUpdateException exception) when (IsUniqueViolation(exception))
+        {
+            db.Entry(created).State = EntityState.Detached;
+            var recovered = await FindConsentAsync(userId, tracking: true, cancellationToken);
+            if (recovered is null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception).Throw();
+            }
+
+            return recovered;
+        }
+    }
 
     public Task<RewardTransaction?> FindRewardByIdempotencyAsync(string idempotencyKey, CancellationToken cancellationToken) =>
         db.RewardTransactions.AsNoTracking().SingleOrDefaultAsync(item => item.IdempotencyKey == idempotencyKey, cancellationToken);
@@ -274,4 +384,7 @@ public sealed class GrowthStore(ProDocDbContext db) : IGrowthStore
     }
 
     public Task SaveChangesAsync(CancellationToken cancellationToken) => db.SaveChangesAsync(cancellationToken);
+
+    private static bool IsUniqueViolation(DbUpdateException exception) =>
+        exception.InnerException is SqlException sql && sql.Number is 2601 or 2627;
 }

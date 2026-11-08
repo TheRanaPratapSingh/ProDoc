@@ -15,6 +15,7 @@ public sealed class ConsultationScheduleConfiguration : IEntityTypeConfiguration
         builder.Property(schedule => schedule.TimeZoneId).HasMaxLength(64).HasDefaultValue(ConsultationSchedule.DefaultTimeZone);
         builder.Property(schedule => schedule.BufferMinutes).HasDefaultValue(0);
         builder.Property(schedule => schedule.RequiresApproval).HasDefaultValue(false);
+        builder.Property(schedule => schedule.BookingMode).HasDefaultValue(ScheduleBookingMode.TimedSlots);
         builder.Property(schedule => schedule.RowVersion).IsRowVersion();
         builder.HasIndex(schedule => schedule.DoctorId).IsUnique().HasFilter("[ClinicId] IS NULL");
         builder.HasIndex(schedule => new { schedule.DoctorId, schedule.ClinicId, schedule.BranchId })

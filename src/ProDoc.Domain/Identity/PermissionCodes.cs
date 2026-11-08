@@ -9,6 +9,8 @@ public static class PermissionCodes
     public const string AccountDeleteRequest = "account.delete.request";
     public const string DoctorsSearch = "doctors.search";
     public const string ProviderOnboard = "provider.onboard";
+    public const string ClinicCreate = "clinic.create";
+    public const string DoctorCreate = "doctor.create";
     public const string AppointmentsBookSelf = "appointments.book.self";
     public const string RecordsReadSelf = "records.read.self";
     public const string DoctorProfileWrite = "doctor.profile.write";
@@ -20,7 +22,10 @@ public static class PermissionCodes
     public const string QueueOperate = "queue.operate";
     public const string ReportsReadClinic = "reports.read.clinic";
     public const string AppointmentsBookWalkIn = "appointments.book.walkin";
+    public const string AppointmentsManageClinic = "appointments.manage.clinic";
     public const string PatientsSearchClinic = "patients.search.clinic";
+    public const string BillingCollectDesk = "billing.collect.desk";
+    public const string RecordsCoordinateClinic = "records.coordinate.clinic";
     public const string AdminAccess = "admin.access";
     public const string VerificationReview = "verification.review";
     public const string CommissionsManage = "commissions.manage";
@@ -54,11 +59,13 @@ public static class PermissionCodes
         new(AccountWrite, "Update the signed-in account profile."),
         new(AccountDeleteRequest, "Request erasure of the signed-in account."),
         new(DoctorsSearch, "Search published doctor profiles."),
-        new(ProviderOnboard, "Create and update the signed-in user's doctor or clinic application."),
+        new(ProviderOnboard, "Update the signed-in user's existing doctor or clinic application (not create)."),
+        new(ClinicCreate, "Create new clinic records. Restricted to Super Admin."),
+        new(DoctorCreate, "Create new doctor profiles for users who are not already doctors. Restricted to Super Admin."),
         new(AppointmentsBookSelf, "Book an appointment for the signed-in patient."),
         new(RecordsReadSelf, "Read medical records shared with the signed-in patient."),
         new(DoctorProfileWrite, "Maintain the signed-in doctor's professional profile."),
-        new(ScheduleManage, "Maintain the signed-in doctor's schedule."),
+        new(ScheduleManage, "Create and maintain doctor consultation schedules for owned or assigned clinic coverage."),
         new(AppointmentsManageAssigned, "Manage appointments assigned to the signed-in doctor."),
         new(PrescriptionsPublish, "Publish a prescription for a completed consultation."),
         new(ClinicManage, "Maintain clinic and branch profiles."),
@@ -66,7 +73,10 @@ public static class PermissionCodes
         new(QueueOperate, "Operate the live clinic queue."),
         new(ReportsReadClinic, "Read clinic operational reports."),
         new(AppointmentsBookWalkIn, "Book a walk-in appointment at a clinic."),
+        new(AppointmentsManageClinic, "Book, reschedule, and cancel clinic appointments for assigned doctors as staff."),
         new(PatientsSearchClinic, "Search patients who have a relationship with the clinic."),
+        new(BillingCollectDesk, "Record pay-at-clinic collections at the reception desk."),
+        new(RecordsCoordinateClinic, "View prescription readiness and upload patient reports for clinic visits (no Rx edit/sign)."),
         new(AdminAccess, "Open the platform administration portal."),
         new(VerificationReview, "Review doctor and clinic verification requests."),
         new(CommissionsManage, "Configure commission rules and settlements."),
@@ -106,12 +116,11 @@ public static class PermissionCodes
                 DoctorsSearch,
                 AppointmentsBookSelf,
                 RecordsReadSelf,
-                ProviderOnboard,
                 AssistantUse,
                 ReviewCreate,
                 GrowthUse,
-                IntegrationsUse,
-                PartnersDevelop
+                IntegrationsUse
+                // ProviderOnboard / ClinicCreate / DoctorCreate / PartnersDevelop: Super Admin only.
             ],
             [RoleNames.Doctor] =
             [
@@ -134,15 +143,26 @@ public static class PermissionCodes
                 QueueOperate,
                 ReportsReadClinic,
                 AppointmentsBookWalkIn,
+                AppointmentsManageClinic,
                 PatientsSearchClinic,
+                BillingCollectDesk,
+                RecordsCoordinateClinic,
+                DoctorsSearch,
                 ReviewRespond
             ],
             [RoleNames.Receptionist] =
             [
                 AccountRead,
+                AccountWrite,
                 QueueOperate,
                 AppointmentsBookWalkIn,
-                PatientsSearchClinic
+                AppointmentsManageClinic,
+                PatientsSearchClinic,
+                BillingCollectDesk,
+                RecordsCoordinateClinic,
+                DoctorsSearch,
+                ReportsReadClinic,
+                ScheduleManage
             ],
             [RoleNames.ClinicStaff] =
             [
@@ -164,7 +184,11 @@ public static class PermissionCodes
                 QueueOperate,
                 ReportsReadClinic,
                 AppointmentsBookWalkIn,
-                PatientsSearchClinic
+                AppointmentsManageClinic,
+                PatientsSearchClinic,
+                BillingCollectDesk,
+                RecordsCoordinateClinic,
+                DoctorsSearch
             ],
             [RoleNames.PlatformAdmin] = Catalog.Select(permission => permission.Code).ToArray()
         };

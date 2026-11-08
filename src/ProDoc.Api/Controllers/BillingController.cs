@@ -61,10 +61,20 @@ public sealed class BillingController(FinanceService finance) : ControllerBase
         return Ok();
     }
 
-    [HasPermission(PermissionCodes.AppointmentsManageAssigned)]
     [HttpPost("appointments/{appointmentId:guid}/payments/clinic-collection")]
-    public Task<PaymentDetails> ClinicCollection(Guid appointmentId, CancellationToken cancellationToken) =>
-        finance.RecordClinicCollectionAsync(User.GetUserId(), appointmentId, Meta(), cancellationToken);
+    public async Task<ActionResult<PaymentDetails>> ClinicCollection(Guid appointmentId, CancellationToken cancellationToken)
+    {
+        if (!User.Claims.Any(claim =>
+                claim.Type == "perm"
+                && claim.Value is PermissionCodes.AppointmentsManageAssigned
+                    or PermissionCodes.BillingCollectDesk
+                    or PermissionCodes.ClinicManage))
+        {
+            return Forbid();
+        }
+
+        return Ok(await finance.RecordClinicCollectionAsync(User.GetUserId(), appointmentId, Meta(), cancellationToken));
+    }
 
     [Authorize]
     [HttpPost("payments/{paymentId:guid}/refunds")]

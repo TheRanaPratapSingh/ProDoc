@@ -10,6 +10,7 @@ using ProDoc.Api.Errors;
 using ProDoc.Api.Security;
 using ProDoc.Application;
 using ProDoc.Infrastructure;
+using ProDoc.Infrastructure.Notifications;
 using ProDoc.Infrastructure.Queue;
 using Serilog;
 using Serilog.Events;
@@ -46,6 +47,8 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 
 builder.Services.AddApplication();
+builder.Services.Configure<ProDoc.Application.Clinical.FollowUpOptions>(
+    builder.Configuration.GetSection(ProDoc.Application.Clinical.FollowUpOptions.SectionName));
 builder.Services.AddInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ApiExceptionHandler>();
@@ -132,7 +135,8 @@ builder.Services.AddRateLimiter(options =>
         {
             Status = StatusCodes.Status429TooManyRequests,
             Title = "Too many requests. Wait a moment and try again.",
-            Type = "urn:prodoc:rate_limited"
+            Type = "urn:prodoc:rate_limited",
+            Extensions = { ["code"] = "rate_limited" }
         }, cancellationToken);
     };
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
@@ -204,6 +208,15 @@ builder.Services.AddRateLimiter(options =>
                     QueueLimit = 0
                 };
             }));
+    options.AddPolicy("appointment_share", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = builder.Environment.IsDevelopment() ? 120 : 30,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
 });
 
 var app = builder.Build();
@@ -214,7 +227,9 @@ app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseSerilogRequestLogging(options =>
 {
     options.GetLevel = (httpContext, elapsed, ex) =>
-        ex is not null || httpContext.Response.StatusCode >= 500
+        ex is not null && ProDoc.Api.Errors.ApiExceptionHandler.IsClientDisconnect(httpContext, ex)
+            ? LogEventLevel.Debug
+            : ex is not null || httpContext.Response.StatusCode >= 500
             ? LogEventLevel.Error
             : httpContext.Response.StatusCode >= 400
                 ? LogEventLevel.Warning
@@ -249,6 +264,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHub<QueueHub>("/hubs/queue");
+app.MapHub<NotificationsHub>("/hubs/notifications");
 if (app.Environment.IsDevelopment())
 {
     // Opening the site root (or a profile without launchUrl) lands on Swagger in Development.

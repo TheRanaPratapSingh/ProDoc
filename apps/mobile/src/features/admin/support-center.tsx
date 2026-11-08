@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AppText } from '@/components/ui/text';
@@ -78,8 +79,7 @@ export function SupportCenter() {
 
   return (
     <AuthScaffold>
-      <Button label={copy.back} variant="secondary" onPress={() => router.back()} />
-      <AppText variant="title">{copy.supportCenter}</AppText>
+      <ScreenHeader title={copy.supportCenter} />
       <Button label={copy.helpCenterTitle} variant="secondary" onPress={() => router.push('/help' as Href)} />
       <Card>
         <AppText variant="label">{copy.supportCategory}</AppText>

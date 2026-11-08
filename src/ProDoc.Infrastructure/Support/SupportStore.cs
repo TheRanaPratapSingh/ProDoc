@@ -1,7 +1,9 @@
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using ProDoc.Application.Support;
 using ProDoc.Domain.Admin;
 using ProDoc.Domain.Governance;
+using ProDoc.Domain.Identity;
 using ProDoc.Domain.Queue;
 using ProDoc.Domain.Support;
 using ProDoc.Infrastructure.Persistence;
@@ -71,6 +73,27 @@ public sealed class SupportStore(ProDocDbContext db) : ISupportStore
 
     public void AddArticle(HelpArticle article) => db.HelpArticles.Add(article);
 
+    public void AddArticleFeedback(HelpArticleFeedback feedback) => db.HelpArticleFeedback.Add(feedback);
+
+    public async Task<IReadOnlyList<Guid>> ListPlatformAdminUserIdsAsync(CancellationToken cancellationToken)
+    {
+        return await (
+            from userRole in db.Set<IdentityUserRole<Guid>>()
+            join role in db.Roles on userRole.RoleId equals role.Id
+            where role.Name == RoleNames.PlatformAdmin
+            select userRole.UserId).Distinct().ToListAsync(cancellationToken);
+    }
+
+    public Task<bool> HasRecentSimilarTicketAsync(Guid userId, string subject, DateTimeOffset sinceUtc, CancellationToken cancellationToken)
+    {
+        var normalized = subject.Trim();
+        return db.SupportTickets.AsNoTracking().AnyAsync(
+            item => item.CreatedByUserId == userId
+                && item.Subject == normalized
+                && item.CreatedAtUtc >= sinceUtc,
+            cancellationToken);
+    }
+
     public Task<SupportTicket?> FindTicketAsync(Guid ticketId, bool tracking, CancellationToken cancellationToken)
     {
         var query = tracking ? db.SupportTickets.AsQueryable() : db.SupportTickets.AsNoTracking();
@@ -120,6 +143,7 @@ public sealed class SupportStore(ProDocDbContext db) : ISupportStore
                 item.DueAtUtc != null
                 && item.DueAtUtc < now
                 && (item.Status == SupportTicketStatus.Open
+                    || item.Status == SupportTicketStatus.Assigned
                     || item.Status == SupportTicketStatus.InProgress
                     || item.Status == SupportTicketStatus.WaitingOnUser));
         }
@@ -133,19 +157,20 @@ public sealed class SupportStore(ProDocDbContext db) : ISupportStore
 
     public async Task<string> NextTicketNumberAsync(CancellationToken cancellationToken)
     {
-        var stem = $"TCK{DateTime.UtcNow:yyyyMMdd}";
+        var year = DateTime.UtcNow.Year;
+        var prefix = $"PRODOC-{year}-";
         var latest = await db.SupportTickets.AsNoTracking()
-            .Where(item => item.Number.StartsWith(stem))
+            .Where(item => item.Number.StartsWith(prefix))
             .OrderByDescending(item => item.Number)
             .Select(item => item.Number)
             .FirstOrDefaultAsync(cancellationToken);
         var next = 1;
-        if (latest is not null && latest.Length > stem.Length && int.TryParse(latest[stem.Length..], out var parsed))
+        if (latest is not null && latest.Length > prefix.Length && int.TryParse(latest[prefix.Length..], out var parsed))
         {
             next = parsed + 1;
         }
 
-        return $"{stem}{next:D4}";
+        return $"{prefix}{next:D6}";
     }
 
     public Task AddStatusHistoryAsync(TicketStatusHistory history, CancellationToken cancellationToken)

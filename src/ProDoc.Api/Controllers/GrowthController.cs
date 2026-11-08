@@ -26,12 +26,12 @@ public sealed class GrowthController(GrowthService growth) : ControllerBase
     [HasPermission(PermissionCodes.GrowthUse)]
     [HttpPost("growth/wallet/redeem")]
     public Task<RewardWalletDetails> Redeem(RedeemPointsRequest request, CancellationToken cancellationToken) =>
-        growth.RedeemPointsAsync(User.GetUserId(), request.Points, Meta(), cancellationToken);
+        growth.RedeemPointsAsync(User.GetUserId(), request.Points, request.IdempotencyKey, Meta(), cancellationToken);
 
     [HasPermission(PermissionCodes.GrowthUse)]
     [HttpGet("growth/coupons")]
     public Task<IReadOnlyList<CouponDetails>> Coupons(CancellationToken cancellationToken) =>
-        growth.ListActiveCouponsAsync(cancellationToken);
+        growth.ListActiveCouponsAsync(User.GetUserId(), cancellationToken);
 
     [HasPermission(PermissionCodes.GrowthUse)]
     [HttpPost("growth/coupons/preview")]

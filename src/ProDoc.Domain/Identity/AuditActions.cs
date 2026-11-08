@@ -42,7 +42,21 @@ public static class AuditActions
 
     public const string AppointmentWalkIn = "appointment.walk_in";
 
+    public const string AppointmentDeskBooked = "appointment.desk_booked";
+
     public const string AppointmentCheckedIn = "appointment.checked_in";
+
+    public const string AppointmentShareCreated = "appointment.share.created";
+
+    public const string AppointmentShareRevoked = "appointment.share.revoked";
+
+    public const string AppointmentShareAccessed = "appointment.share.accessed";
+
+    public const string DeskPatientRegistered = "reception.patient.registered";
+
+    public const string DeskCollectionRecorded = "reception.billing.collected";
+
+    public const string DeskRefundRequested = "reception.billing.refund_requested";
 
     public const string AppointmentCompleted = "appointment.completed";
 
@@ -59,6 +73,16 @@ public static class AuditActions
     public const string ConsultationUpdated = "clinical.consultation.updated";
 
     public const string ConsultationCompleted = "clinical.consultation.completed";
+
+    public const string FollowUpCreated = "clinical.follow_up.created";
+
+    public const string FollowUpUpdated = "clinical.follow_up.updated";
+
+    public const string FollowUpCancelled = "clinical.follow_up.cancelled";
+
+    public const string FollowUpCompleted = "clinical.follow_up.completed";
+
+    public const string FollowUpLinked = "clinical.follow_up.linked";
 
     public const string PrescriptionDrafted = "clinical.prescription.drafted";
 
@@ -209,4 +233,48 @@ public static class AuditActions
     public const string AutomationWorkflowChanged = "automation.workflow.changed";
 
     public const string NotificationPreferencesChanged = "automation.preferences.changed";
+
+    public const string StaffInvited = "admin.staff.invited";
+
+    public const string StaffInviteResent = "admin.staff.invite_resent";
+
+    public const string StaffInviteAccepted = "admin.staff.invite_accepted";
+
+    public const string StaffInviteCancelled = "admin.staff.invite_cancelled";
+
+    public const string AdminClinicCreated = "admin.clinic.created";
+
+    public const string AdminClinicUpdated = "admin.clinic.updated";
+
+    public const string AdminClinicDoctorAssigned = "admin.clinic.doctor_assigned";
+
+    public const string AdminClinicStaffAssigned = "admin.clinic.staff_assigned";
+
+    public const string AdminUserDeleted = "admin.user.deleted";
+
+    public const string ScheduleCreated = "schedule.created";
+
+    public const string ScheduleUpdated = "schedule.updated";
+
+    public const string ScheduleBookingModeChanged = "schedule.booking_mode_changed";
+
+    public const string ScheduleHoursReplaced = "schedule.hours_replaced";
+
+    public const string ScheduleBreaksReplaced = "schedule.breaks_replaced";
+
+    public const string ScheduleClosureAdded = "schedule.closure_added";
+
+    public const string ScheduleClosureRemoved = "schedule.closure_removed";
+
+    public const string ScheduleExtraAdded = "schedule.extra_added";
+
+    public const string ScheduleExtraRemoved = "schedule.extra_removed";
+
+    public const string ScheduleDayOverrideReplaced = "schedule.day_override_replaced";
+
+    public const string ScheduleDayCopied = "schedule.day_copied";
+
+    public const string SchedulePublicationChanged = "schedule.publication_changed";
+
+    public const string ScheduleDeleted = "schedule.deleted";
 }

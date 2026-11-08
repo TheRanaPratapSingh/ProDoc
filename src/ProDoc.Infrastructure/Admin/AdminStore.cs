@@ -159,19 +159,50 @@ public sealed class AdminStore(ProDocDbContext db, UserManager<ApplicationUser> 
             providerGrowth);
     }
 
-    public async Task<IReadOnlyList<AdminUserSummary>> SearchUsersAsync(string? query, string? role, bool? suspended, int take, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<AdminUserSummary>> SearchUsersAsync(
+        string? query,
+        string? role,
+        bool? suspended,
+        Guid? clinicId,
+        int take,
+        CancellationToken cancellationToken)
     {
+        HashSet<Guid>? clinicUserIds = null;
+        if (clinicId is Guid scopedClinic)
+        {
+            var staffIds = await db.ClinicStaffMembers.AsNoTracking()
+                .Where(item => item.ClinicId == scopedClinic && item.IsActive)
+                .Select(item => item.UserId)
+                .ToListAsync(cancellationToken);
+            var doctorUserIds = await db.DoctorClinicAffiliations.AsNoTracking()
+                .Where(item => item.ClinicId == scopedClinic)
+                .Join(db.Doctors.AsNoTracking(), link => link.DoctorId, doctor => doctor.Id, (_, doctor) => doctor.UserId)
+                .ToListAsync(cancellationToken);
+            var ownerIds = await db.Clinics.AsNoTracking()
+                .Where(item => item.Id == scopedClinic)
+                .Select(item => item.OwnerUserId)
+                .ToListAsync(cancellationToken);
+            clinicUserIds = staffIds.Concat(doctorUserIds).Concat(ownerIds).ToHashSet();
+        }
+
         var usersQuery =
             from user in db.Users.AsNoTracking()
             join patient in db.Patients.AsNoTracking() on user.Id equals patient.UserId into patients
             from patient in patients.DefaultIfEmpty()
+            where user.PermanentlyDeletedAtUtc == null
             select new { user, patient };
+
+        if (clinicUserIds is not null)
+        {
+            usersQuery = usersQuery.Where(item => clinicUserIds.Contains(item.user.Id));
+        }
 
         if (!string.IsNullOrWhiteSpace(query))
         {
             var q = query.Trim();
             usersQuery = usersQuery.Where(item =>
                 item.user.PhoneNumber!.Contains(q)
+                || (item.user.Email != null && item.user.Email.Contains(q))
                 || (item.patient != null && item.patient.FullName != null && item.patient.FullName.Contains(q)));
         }
 
@@ -217,22 +248,260 @@ public sealed class AdminStore(ProDocDbContext db, UserManager<ApplicationUser> 
         return result;
     }
 
+    public async Task<AdminUserDetails?> GetUserDetailsAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        var user = await db.Users.AsNoTracking().SingleOrDefaultAsync(item => item.Id == userId, cancellationToken);
+        if (user is null || user.PermanentlyDeletedAtUtc is not null)
+        {
+            return null;
+        }
+
+        var patient = await db.Patients.AsNoTracking().SingleOrDefaultAsync(item => item.UserId == userId, cancellationToken);
+        var roles = await users.GetRolesAsync(user);
+        var doctor = await db.Doctors.AsNoTracking().SingleOrDefaultAsync(item => item.UserId == userId, cancellationToken);
+        string? specialization = null;
+        string? qualifications = null;
+        string? registration = null;
+        if (doctor is not null)
+        {
+            var primary = await db.Set<DoctorSpecialization>().AsNoTracking()
+                .Where(item => item.DoctorId == doctor.Id && item.IsPrimary)
+                .Join(db.Specializations.AsNoTracking(), link => link.SpecializationId, spec => spec.Id, (_, spec) => spec.Name)
+                .FirstOrDefaultAsync(cancellationToken);
+            specialization = primary;
+            qualifications = await db.Set<DoctorQualification>().AsNoTracking()
+                .Where(item => item.DoctorId == doctor.Id)
+                .Select(item => item.Name)
+                .FirstOrDefaultAsync(cancellationToken);
+            registration = await db.Set<DoctorRegistration>().AsNoTracking()
+                .Where(item => item.DoctorId == doctor.Id && item.IsCurrent)
+                .Select(item => item.Number)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+
+        var staffClinics = await db.ClinicStaffMembers.AsNoTracking()
+            .Where(item => item.UserId == userId)
+            .Join(db.Clinics.AsNoTracking(), link => link.ClinicId, clinic => clinic.Id, (link, clinic) => new AdminUserClinicLink(
+                clinic.Id,
+                clinic.Name ?? clinic.Reference,
+                link.Role,
+                link.IsActive))
+            .ToListAsync(cancellationToken);
+
+        var ownedClinics = await db.Clinics.AsNoTracking()
+            .Where(item => item.OwnerUserId == userId)
+            .Select(item => new AdminUserClinicLink(item.Id, item.Name ?? item.Reference, RoleNames.ClinicAdmin, true))
+            .ToListAsync(cancellationToken);
+
+        var doctorClinics = doctor is null
+            ? []
+            : await db.DoctorClinicAffiliations.AsNoTracking()
+                .Where(item => item.DoctorId == doctor.Id)
+                .Join(db.Clinics.AsNoTracking(), link => link.ClinicId, clinic => clinic.Id, (_, clinic) => new AdminUserClinicLink(
+                    clinic.Id,
+                    clinic.Name ?? clinic.Reference,
+                    RoleNames.Doctor,
+                    true))
+                .ToListAsync(cancellationToken);
+
+        var assignedDoctors = await db.ReceptionistDoctorAssignments.AsNoTracking()
+            .Where(item => item.ReceptionistUserId == userId && item.IsActive)
+            .Join(db.Doctors.AsNoTracking(), link => link.DoctorId, doc => doc.Id, (link, doc) => new { link, doc })
+            .Join(db.Clinics.AsNoTracking(), row => row.link.ClinicId, clinic => clinic.Id, (row, clinic) => new AdminUserDoctorLink(
+                row.doc.Id,
+                row.doc.DisplayName ?? ((row.doc.FirstName ?? "") + " " + (row.doc.LastName ?? "")).Trim(),
+                clinic.Id,
+                clinic.Name ?? clinic.Reference))
+            .ToListAsync(cancellationToken);
+
+        var clinics = staffClinics
+            .Concat(ownedClinics)
+            .Concat(doctorClinics)
+            .GroupBy(item => new { item.ClinicId, item.Role })
+            .Select(group => group.First())
+            .ToList();
+
+        return new AdminUserDetails(
+            user.Id,
+            user.PhoneNumber ?? string.Empty,
+            patient?.FullName,
+            user.Email,
+            roles.ToArray(),
+            user.CreatedAtUtc,
+            user.SuspendedAtUtc,
+            patient?.DeletionRequestedAtUtc,
+            doctor?.Id,
+            doctor?.Status.ToString(),
+            specialization,
+            qualifications,
+            registration,
+            doctor?.YearsOfExperience,
+            clinics,
+            assignedDoctors);
+    }
+
+    public async Task PermanentDeleteUserAsync(Guid userId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var user = await users.FindByIdAsync(userId.ToString())
+            ?? throw DomainException.NotFound("account_not_found", "That account was not found.");
+        if (user.PermanentlyDeletedAtUtc is not null)
+        {
+            throw DomainException.NotFound("account_not_found", "That account was not found.");
+        }
+
+        var roles = await users.GetRolesAsync(user);
+        if (roles.Contains(RoleNames.PlatformAdmin))
+        {
+            throw DomainException.Validation("cannot_delete_admin", "Platform administrators cannot be deleted here.");
+        }
+
+        var originalPhone = user.PhoneNumber;
+
+        await DeactivateClinicAccessAsync(userId, now, cancellationToken);
+
+        var patient = await db.Patients.SingleOrDefaultAsync(item => item.UserId == userId, cancellationToken);
+        patient?.AnonymizeForPermanentDeletion(now);
+
+        var doctor = await db.Doctors.SingleOrDefaultAsync(item => item.UserId == userId, cancellationToken);
+        doctor?.AnonymizeForPermanentDeletion(now);
+
+        if (!string.IsNullOrWhiteSpace(originalPhone))
+        {
+            var invites = await db.StaffInvitations
+                .Where(item => item.PhoneE164 == originalPhone
+                    && item.Status != StaffInvitationStatus.Accepted
+                    && item.Status != StaffInvitationStatus.Cancelled)
+                .ToListAsync(cancellationToken);
+            foreach (var invite in invites)
+            {
+                invite.Cancel(now);
+            }
+        }
+
+        var devices = await db.PushDevices.Where(item => item.UserId == userId && item.IsActive).ToListAsync(cancellationToken);
+        foreach (var device in devices)
+        {
+            device.Deactivate(now);
+        }
+
+        if (roles.Count > 0)
+        {
+            var roleResult = await users.RemoveFromRolesAsync(user, roles);
+            if (!roleResult.Succeeded)
+            {
+                throw new InvalidOperationException("Could not revoke roles for permanent deletion.");
+            }
+        }
+
+        var tombstone = $"deleted_{userId:N}";
+        user.UserName = tombstone;
+        user.NormalizedUserName = tombstone.ToUpperInvariant();
+        user.Email = null;
+        user.NormalizedEmail = null;
+        user.EmailConfirmed = false;
+        user.PhoneNumber = null;
+        user.PhoneNumberConfirmed = false;
+        user.PasswordHash = null;
+        user.SecurityStamp = Guid.NewGuid().ToString("N");
+        user.ConcurrencyStamp = Guid.NewGuid().ToString("N");
+        user.LockoutEnabled = true;
+        user.LockoutEnd = DateTimeOffset.MaxValue;
+        user.SuspendedAtUtc = now;
+        user.SuspensionReason = ApplicationUser.PermanentDeletionReason;
+        user.PermanentlyDeletedAtUtc = now;
+
+        var updateResult = await users.UpdateAsync(user);
+        if (!updateResult.Succeeded)
+        {
+            throw new InvalidOperationException("Could not scrub credentials for permanent deletion.");
+        }
+    }
+
     public async Task SuspendUserAsync(Guid userId, string? reason, DateTimeOffset now, CancellationToken cancellationToken)
     {
         var user = await users.FindByIdAsync(userId.ToString())
             ?? throw DomainException.NotFound("account_not_found", "That account was not found.");
+        if (user.PermanentlyDeletedAtUtc is not null)
+        {
+            throw DomainException.NotFound("account_not_found", "That account was not found.");
+        }
+
+        var roles = await users.GetRolesAsync(user);
+        if (roles.Contains(RoleNames.PlatformAdmin))
+        {
+            throw DomainException.Validation("cannot_suspend_admin", "Platform administrators cannot be deactivated here.");
+        }
+
+        if (user.SuspendedAtUtc is not null)
+        {
+            throw DomainException.Conflict("account_already_inactive", "That account is already inactive.");
+        }
+
+        var normalizedReason = string.IsNullOrWhiteSpace(reason)
+            ? ApplicationUser.AccountDeactivationReason
+            : reason.Trim()[..Math.Min(reason.Trim().Length, 240)];
+
         user.SuspendedAtUtc = now;
-        user.SuspensionReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim()[..Math.Min(reason.Trim().Length, 240)];
+        user.SuspensionReason = normalizedReason;
         await users.UpdateAsync(user);
+
+        await DeactivateClinicAccessAsync(userId, now, cancellationToken);
+
+        var doctor = await db.Doctors.SingleOrDefaultAsync(item => item.UserId == userId, cancellationToken);
+        doctor?.SuspendForAccountDeactivation(ApplicationUser.AccountDeactivationReason, now);
     }
 
-    public async Task ReactivateUserAsync(Guid userId, CancellationToken cancellationToken)
+    public async Task ReactivateUserAsync(Guid userId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         var user = await users.FindByIdAsync(userId.ToString())
             ?? throw DomainException.NotFound("account_not_found", "That account was not found.");
+        if (user.PermanentlyDeletedAtUtc is not null)
+        {
+            throw DomainException.NotFound("account_not_found", "That account was not found.");
+        }
+
+        if (user.SuspendedAtUtc is null)
+        {
+            throw DomainException.Conflict("account_already_active", "That account is already active.");
+        }
+
         user.SuspendedAtUtc = null;
         user.SuspensionReason = null;
         await users.UpdateAsync(user);
+
+        var staff = await db.ClinicStaffMembers.Where(item => item.UserId == userId && !item.IsActive).ToListAsync(cancellationToken);
+        foreach (var row in staff)
+        {
+            row.Reactivate(row.BranchId, row.Role, now);
+        }
+
+        var coverage = await db.ReceptionistDoctorAssignments
+            .Where(item => item.ReceptionistUserId == userId && !item.IsActive)
+            .ToListAsync(cancellationToken);
+        foreach (var row in coverage)
+        {
+            row.Reactivate(now);
+        }
+
+        var doctor = await db.Doctors.SingleOrDefaultAsync(item => item.UserId == userId, cancellationToken);
+        doctor?.ReinstateFromAccountDeactivation(ApplicationUser.AccountDeactivationReason, now);
+    }
+
+    private async Task DeactivateClinicAccessAsync(Guid userId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var staff = await db.ClinicStaffMembers.Where(item => item.UserId == userId && item.IsActive).ToListAsync(cancellationToken);
+        foreach (var row in staff)
+        {
+            row.Deactivate(now);
+        }
+
+        var coverage = await db.ReceptionistDoctorAssignments
+            .Where(item => item.ReceptionistUserId == userId && item.IsActive)
+            .ToListAsync(cancellationToken);
+        foreach (var row in coverage)
+        {
+            row.Deactivate(now);
+        }
     }
 
     public async Task RevokeRefreshTokensAsync(Guid userId, DateTimeOffset now, CancellationToken cancellationToken)
@@ -393,19 +662,20 @@ public sealed class AdminStore(ProDocDbContext db, UserManager<ApplicationUser> 
 
     public async Task<string> NextTicketNumberAsync(CancellationToken cancellationToken)
     {
-        var stem = $"TCK{DateTime.UtcNow:yyyyMMdd}";
+        var year = DateTime.UtcNow.Year;
+        var prefix = $"PRODOC-{year}-";
         var latest = await db.SupportTickets.AsNoTracking()
-            .Where(item => item.Number.StartsWith(stem))
+            .Where(item => item.Number.StartsWith(prefix))
             .OrderByDescending(item => item.Number)
             .Select(item => item.Number)
             .FirstOrDefaultAsync(cancellationToken);
         var next = 1;
-        if (latest is not null && latest.Length > stem.Length && int.TryParse(latest[stem.Length..], out var parsed))
+        if (latest is not null && latest.Length > prefix.Length && int.TryParse(latest[prefix.Length..], out var parsed))
         {
             next = parsed + 1;
         }
 
-        return $"{stem}{next:D4}";
+        return $"{prefix}{next:D6}";
     }
 
     public async Task<IReadOnlyList<PlatformSetting>> ListSettingsAsync(CancellationToken cancellationToken) =>

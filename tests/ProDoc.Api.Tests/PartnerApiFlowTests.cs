@@ -16,10 +16,19 @@ public sealed class PartnerApiFlowTests(ProDocApiFactory factory)
     [Fact]
     public async Task Partner_registration_oauth_scopes_sandbox_booking_and_webhook_security()
     {
-        var developer = await SignInAsync("9000000192");
-        var admin = await SignInAsync("9000000001");
+        // Partner developer portal APIs require PartnersDevelop (PlatformAdmin / Super Admin only).
+        var outsider = await SignInAsync("9000000192");
+        var developer = await SignInAsync("9000000001", purpose: "admin");
+        var admin = developer;
 
-        var deniedAdmin = await SendAsync(HttpMethod.Get, "/api/v1/admin/partners", developer.AccessToken);
+        var deniedPortal = await SendAsync(HttpMethod.Post, "/api/v1/partners/register", outsider.AccessToken, JsonContent.Create(new
+        {
+            name = "Unauthorized Org",
+            contactEmail = "nope@example.test"
+        }));
+        Assert.Equal(HttpStatusCode.Forbidden, deniedPortal.StatusCode);
+
+        var deniedAdmin = await SendAsync(HttpMethod.Get, "/api/v1/admin/partners", outsider.AccessToken);
         Assert.Equal(HttpStatusCode.Forbidden, deniedAdmin.StatusCode);
 
         var registered = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/partners/register", developer.AccessToken, JsonContent.Create(new
@@ -239,9 +248,9 @@ public sealed class PartnerApiFlowTests(ProDocApiFactory factory)
         Assert.True(PartnerWebhookEndpoint.Verify(secret, 1_700_000_000, body, sig.ToUpperInvariant(), DateTimeOffset.FromUnixTimeSeconds(1_700_000_000), TimeSpan.FromMinutes(5)));
     }
 
-    private async Task<SessionBody> SignInAsync(string phone)
+    private async Task<SessionBody> SignInAsync(string phone, string? purpose = null)
     {
-        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone });
+        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone, purpose });
         var otpBody = await otpResponse.Content.ReadAsStringAsync();
         Assert.True(otpResponse.IsSuccessStatusCode, otpBody);
         var otp = JsonSerializer.Deserialize<OtpBody>(otpBody, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -250,7 +259,8 @@ public sealed class PartnerApiFlowTests(ProDocApiFactory factory)
         {
             phoneNumber = phone,
             code = otp!.DevelopmentCode,
-            deviceName = "partner-test"
+            deviceName = "partner-test",
+            purpose
         });
         var verifyBody = await verify.Content.ReadAsStringAsync();
         Assert.True(verify.IsSuccessStatusCode, verifyBody);

@@ -71,20 +71,37 @@ public sealed class GrowthService(IGrowthStore store, IClock clock)
         var code = await EnsureReferralCodeAsync(userId, cancellationToken);
         var account = await EnsureRewardAccountAsync(userId, cancellationToken);
         var rows = await store.ListRelationshipsForReferrerAsync(userId, 50, cancellationToken);
+        var names = await store.FindPatientDisplayNamesAsync(rows.Select(item => item.ReferredUserId).Distinct().ToArray(), cancellationToken);
+        var rewardPoints = await IntSettingAsync("growth.referral_reward_points", GrowthDefaults.ReferralRewardPoints, cancellationToken);
+        var shareUrl = ShareBaseUrl + code.Code;
+        var shareText =
+            $"Join ProDoc and easily book appointments with verified doctors near you. Use my referral code {code.Code} when registering: {shareUrl}";
         return new ReferralDashboard(
             code.Code,
-            ShareBaseUrl + code.Code,
-            $"Join me on ProDoc with code {code.Code}: {ShareBaseUrl}{code.Code}",
+            shareUrl,
+            shareText,
             rows.Count(item => item.Status != ReferralStatus.Rejected),
             rows.Count(item => item.Status is ReferralStatus.Converted or ReferralStatus.Rewarded),
             rows.Count(item => item.Status == ReferralStatus.Rewarded),
             account.PointsBalance,
             account.CreditBalanceInr,
-            rows.Select(item => new ReferralItem(item.Id, item.Status.ToString(), item.RegisteredAtUtc, item.ConvertedAtUtc, item.RewardedAtUtc)).ToArray());
+            rows.Select(item => new ReferralItem(
+                item.Id,
+                item.Status.ToString(),
+                MapReferralDisplayStatus(item.Status),
+                MaskReferralLabel(names.GetValueOrDefault(item.ReferredUserId)),
+                item.RegisteredAtUtc,
+                item.ConvertedAtUtc,
+                item.RewardedAtUtc,
+                item.Status == ReferralStatus.Rewarded ? rewardPoints : null)).ToArray());
     }
 
     public async Task AttributeReferralOnSignupAsync(Guid referredUserId, string? referralCode, RequestMetadata metadata, CancellationToken cancellationToken)
     {
+        // Every new patient gets a durable referral code + wallet (idempotent).
+        await EnsureReferralCodeAsync(referredUserId, cancellationToken);
+        await EnsureRewardAccountAsync(referredUserId, cancellationToken);
+
         if (string.IsNullOrWhiteSpace(referralCode))
         {
             await TrySendCampaignKindAsync(referredUserId, CampaignKind.Onboarding, referredUserId, cancellationToken);
@@ -99,17 +116,22 @@ public sealed class GrowthService(IGrowthStore store, IClock clock)
         }
         catch (DomainException)
         {
+            await TrySendCampaignKindAsync(referredUserId, CampaignKind.Onboarding, referredUserId, cancellationToken);
+            await store.SaveChangesAsync(cancellationToken);
             return;
         }
 
         if (await store.FindRelationshipByReferredAsync(referredUserId, false, cancellationToken) is not null)
         {
+            await store.SaveChangesAsync(cancellationToken);
             return;
         }
 
         var code = await store.FindReferralCodeByCodeAsync(normalized, false, cancellationToken);
         if (code is null || code.UserId == referredUserId)
         {
+            await TrySendCampaignKindAsync(referredUserId, CampaignKind.Onboarding, referredUserId, cancellationToken);
+            await store.SaveChangesAsync(cancellationToken);
             return;
         }
 
@@ -207,21 +229,55 @@ public sealed class GrowthService(IGrowthStore store, IClock clock)
         await ExpireDueRewardsAsync(userId, cancellationToken);
         account = await EnsureRewardAccountAsync(userId, cancellationToken);
         var history = await store.ListRewardHistoryAsync(userId, 100, cancellationToken);
+        var pointsPerInr = await IntSettingAsync("growth.points_per_inr", GrowthDefaults.PointsPerInr, cancellationToken);
+        if (pointsPerInr <= 0)
+        {
+            pointsPerInr = GrowthDefaults.PointsPerInr;
+        }
+
+        var earned = history.Where(item => item.PointsDelta > 0).Sum(item => item.PointsDelta);
+        var redeemed = history.Where(item => item.PointsDelta < 0).Sum(item => Math.Abs(item.PointsDelta));
         return new RewardWalletDetails(
             account.PointsBalance,
             account.CreditBalanceInr,
+            earned,
+            redeemed,
+            pointsPerInr,
+            pointsPerInr <= 0 ? 0m : Math.Floor(account.PointsBalance / (decimal)pointsPerInr),
             history.Select(MapLedger).ToArray());
     }
 
     public async Task<RewardWalletDetails> RedeemPointsAsync(
         Guid userId,
         int points,
+        string? idempotencyKey,
         RequestMetadata metadata,
         CancellationToken cancellationToken)
     {
-        if (points <= 0 || points % 10 != 0)
+        var pointsPerInr = await IntSettingAsync("growth.points_per_inr", GrowthDefaults.PointsPerInr, cancellationToken);
+        if (pointsPerInr <= 0)
         {
-            throw DomainException.Validation("reward_redeem_invalid", "Redeem points in multiples of 10.");
+            pointsPerInr = GrowthDefaults.PointsPerInr;
+        }
+
+        if (points <= 0 || points % pointsPerInr != 0)
+        {
+            throw DomainException.Validation(
+                "reward_redeem_invalid",
+                $"Redeem points in multiples of {pointsPerInr}.");
+        }
+
+        var key = string.IsNullOrWhiteSpace(idempotencyKey)
+            ? $"redeem:{userId:N}:{points}:{Guid.NewGuid():N}"
+            : $"redeem:{userId:N}:{idempotencyKey.Trim()}";
+        if (key.Length > 120)
+        {
+            throw DomainException.Validation("reward_redeem_key_invalid", "That redemption request is invalid.");
+        }
+
+        if (await store.FindRewardByIdempotencyAsync(key, cancellationToken) is not null)
+        {
+            return await GetWalletAsync(userId, cancellationToken);
         }
 
         await ExpireDueRewardsAsync(userId, cancellationToken);
@@ -231,9 +287,8 @@ public sealed class GrowthService(IGrowthStore store, IClock clock)
             throw DomainException.Validation("reward_balance_insufficient", "Insufficient reward balance.");
         }
 
-        var credit = points / 10m;
-        var key = $"redeem:{userId:N}:{points}:{clock.UtcNow.ToUnixTimeSeconds()}";
-        await CreditAsync(userId, RewardEntryType.Redeem, -points, credit, "Points redeemed to promotional credit", key, "redeem", null, null, cancellationToken);
+        var credit = points / (decimal)pointsPerInr;
+        await CreditAsync(userId, RewardEntryType.Redeem, -points, credit, "Points redeemed to ProDoc booking credit", key, "redeem", null, null, cancellationToken);
         await store.AddAuditAsync(Audit(userId, AuditActions.RewardRedeemed, metadata), cancellationToken);
         await store.SaveChangesAsync(cancellationToken);
         return await GetWalletAsync(userId, cancellationToken);
@@ -364,8 +419,43 @@ public sealed class GrowthService(IGrowthStore store, IClock clock)
         return (use, tx);
     }
 
-    public Task<IReadOnlyList<CouponDetails>> ListActiveCouponsAsync(CancellationToken cancellationToken) =>
-        MapCouponsAsync(store.ListActiveCouponsAsync(clock.UtcNow, cancellationToken));
+    public async Task<IReadOnlyList<CouponDetails>> ListActiveCouponsAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        var coupons = await store.ListActiveCouponsAsync(clock.UtcNow, cancellationToken);
+        var paidCount = await store.CountPaidAppointmentsForUserAsync(userId, cancellationToken);
+        var mapped = new List<CouponDetails>(coupons.Count);
+        foreach (var coupon in coupons)
+        {
+            var used = await store.CountUserRedemptionsAsync(coupon.Id, userId, cancellationToken);
+            var alreadyUsed = coupon.MaxRedemptionsPerUser is int perUser && used >= perUser;
+            string? note = null;
+            var eligible = true;
+            if (alreadyUsed)
+            {
+                eligible = false;
+                note = "Already used";
+            }
+            else if (coupon.FirstBookingOnly && paidCount > 0)
+            {
+                eligible = false;
+                note = "First booking only";
+            }
+            else if (coupon.NewUserOnly && paidCount > 0)
+            {
+                eligible = false;
+                note = "New patients only";
+            }
+            else if (coupon.MaxRedemptions is int globalMax && coupon.RedemptionCount >= globalMax)
+            {
+                eligible = false;
+                note = "Fully redeemed";
+            }
+
+            mapped.Add(MapCoupon(coupon, used, alreadyUsed, eligible, note));
+        }
+
+        return mapped;
+    }
 
     public Task<IReadOnlyList<CouponDetails>> AdminListCouponsAsync(CancellationToken cancellationToken) =>
         MapCouponsAsync(store.ListAllCouponsAsync(cancellationToken));
@@ -733,48 +823,14 @@ public sealed class GrowthService(IGrowthStore store, IClock clock)
         return tx;
     }
 
-    private async Task<ReferralCode> EnsureReferralCodeAsync(Guid userId, CancellationToken cancellationToken)
-    {
-        var existing = await store.FindReferralCodeByUserAsync(userId, true, cancellationToken);
-        if (existing is not null)
-        {
-            return existing;
-        }
+    private Task<ReferralCode> EnsureReferralCodeAsync(Guid userId, CancellationToken cancellationToken) =>
+        store.GetOrCreateReferralCodeAsync(userId, clock.UtcNow, cancellationToken);
 
-        var created = ReferralCode.Create(userId, clock.UtcNow);
-        store.AddReferralCode(created);
-        await store.SaveChangesAsync(cancellationToken);
-        return created;
-    }
+    private Task<RewardAccount> EnsureRewardAccountAsync(Guid userId, CancellationToken cancellationToken) =>
+        store.GetOrCreateRewardAccountAsync(userId, clock.UtcNow, cancellationToken);
 
-    private async Task<RewardAccount> EnsureRewardAccountAsync(Guid userId, CancellationToken cancellationToken)
-    {
-        var existing = await store.FindRewardAccountAsync(userId, true, cancellationToken);
-        if (existing is not null)
-        {
-            return existing;
-        }
-
-        var created = RewardAccount.Create(userId, clock.UtcNow);
-        store.AddRewardAccount(created);
-        await store.SaveChangesAsync(cancellationToken);
-        return created;
-    }
-
-    private async Task<MarketingConsent> EnsureConsentAsync(Guid userId, CancellationToken cancellationToken)
-    {
-        var existing = await store.FindConsentAsync(userId, true, cancellationToken);
-        if (existing is not null)
-        {
-            return existing;
-        }
-
-        // Default opt-out for promotional campaigns; transactional onboarding/follow-up still allowed separately.
-        var created = MarketingConsent.Create(userId, false, clock.UtcNow);
-        store.AddConsent(created);
-        await store.SaveChangesAsync(cancellationToken);
-        return created;
-    }
+    private Task<MarketingConsent> EnsureConsentAsync(Guid userId, CancellationToken cancellationToken) =>
+        store.GetOrCreateConsentAsync(userId, clock.UtcNow, cancellationToken);
 
     private async Task NotifyAsync(Guid userId, string kind, Guid subjectId, string title, string body, CancellationToken cancellationToken)
     {
@@ -802,10 +858,15 @@ public sealed class GrowthService(IGrowthStore store, IClock clock)
     private static async Task<IReadOnlyList<CouponDetails>> MapCouponsAsync(Task<IReadOnlyList<Coupon>> source)
     {
         var rows = await source;
-        return rows.Select(MapCoupon).ToArray();
+        return rows.Select(item => MapCoupon(item)).ToArray();
     }
 
-    private static CouponDetails MapCoupon(Coupon coupon) =>
+    private static CouponDetails MapCoupon(
+        Coupon coupon,
+        int userRedemptionCount = 0,
+        bool alreadyUsed = false,
+        bool eligibleForUser = true,
+        string? eligibilityNote = null) =>
         new(
             coupon.Id,
             coupon.Code,
@@ -823,7 +884,11 @@ public sealed class GrowthService(IGrowthStore store, IClock clock)
             coupon.RedemptionCount,
             coupon.StartsAtUtc,
             coupon.EndsAtUtc,
-            coupon.IsActive);
+            coupon.IsActive,
+            userRedemptionCount,
+            alreadyUsed,
+            eligibleForUser,
+            eligibilityNote);
 
     private static RewardLedgerItem MapLedger(RewardTransaction item) =>
         new(
@@ -839,4 +904,31 @@ public sealed class GrowthService(IGrowthStore store, IClock clock)
 
     private AuditLog Audit(Guid userId, string action, RequestMetadata metadata) =>
         AuditLog.Record(userId, action, clock.UtcNow, metadata.IpAddress, metadata.UserAgent);
+
+    private static string MapReferralDisplayStatus(ReferralStatus status) =>
+        status switch
+        {
+            ReferralStatus.Registered => "Registered",
+            ReferralStatus.Converted => "Qualified",
+            ReferralStatus.Rewarded => "Rewarded",
+            ReferralStatus.Rejected => "Rejected",
+            _ => status.ToString()
+        };
+
+    private static string MaskReferralLabel(string? fullName)
+    {
+        var name = (fullName ?? string.Empty).Trim();
+        if (name.Length == 0)
+        {
+            return "Patient";
+        }
+
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 1)
+        {
+            return parts[0].Length <= 1 ? "Patient" : $"{parts[0][0]}***";
+        }
+
+        return $"{parts[0]} {parts[^1][0]}.";
+    }
 }

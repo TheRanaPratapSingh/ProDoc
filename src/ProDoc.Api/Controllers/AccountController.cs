@@ -33,6 +33,29 @@ public sealed class AccountController(AccountService accounts) : ControllerBase
                 request.FullName,
                 request.PreferredLanguage,
                 ClientContext.IpAddress(HttpContext),
+                ClientContext.UserAgent(HttpContext),
+                request.AgeYears,
+                request.Gender),
+            cancellationToken);
+        return Ok(AccountResponse.From(account));
+    }
+
+    [HasPermission(PermissionCodes.AccountWrite)]
+    [HttpPost("profile/complete")]
+    [ProducesResponseType<AccountResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<AccountResponse>> CompleteProfile(
+        CompletePatientProfileRequest request,
+        CancellationToken cancellationToken)
+    {
+        var account = await accounts.CompleteProfileAsync(
+            new CompletePatientProfileCommand(
+                User.GetUserId(),
+                request.FullName,
+                request.AgeYears,
+                request.Gender,
+                request.PreferredLanguage,
+                ClientContext.IpAddress(HttpContext),
                 ClientContext.UserAgent(HttpContext)),
             cancellationToken);
         return Ok(AccountResponse.From(account));

@@ -1,7 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { ScrollView, View } from 'react-native';
+import { View } from 'react-native';
 
+import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { FormScreenScroll } from '@/components/layout/keyboard-aware-form';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AppText } from '@/components/ui/text';
@@ -17,12 +20,12 @@ import {
   listPartnerApps,
   registerPartner,
 } from '@/services/api/partners-api';
-import { useSessionStore } from '@/stores/session-store';
+import { useAccountPermissions } from '@/stores/session-store';
 
 export function DeveloperPortal() {
   const copy = useCopy();
   const queryClient = useQueryClient();
-  const permissions = useSessionStore((s) => s.account?.permissions ?? []);
+  const permissions = useAccountPermissions();
   const canDevelop = permissions.includes('partners.develop');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -79,15 +82,22 @@ export function DeveloperPortal() {
 
   if (!canDevelop) {
     return (
-      <Card>
-        <AppText variant="label">{copy.partnersPortalTitle}</AppText>
-        <AppText variant="muted">{copy.partnersPortalDenied}</AppText>
-      </Card>
+      <AuthScaffold>
+        <View style={{ gap: spacing.md }}>
+          <ScreenHeader title={copy.partnersPortalTitle} showBack />
+          <Card>
+            <AppText variant="label">{copy.partnersPortalTitle}</AppText>
+            <AppText variant="muted">{copy.partnersPortalDenied}</AppText>
+          </Card>
+        </View>
+      </AuthScaffold>
     );
   }
 
   return (
-    <ScrollView contentContainerStyle={{ gap: spacing.md, padding: spacing.lg }}>
+    <AuthScaffold>
+      <FormScreenScroll contentContainerStyle={{ gap: spacing.md, paddingBottom: spacing.xxl }}>
+        <ScreenHeader title={copy.partnersPortalTitle} showBack />
       <Card>
         <AppText variant="label">{copy.partnersPortalTitle}</AppText>
         <AppText variant="muted">{copy.partnersPortalBody}</AppText>
@@ -143,7 +153,8 @@ export function DeveloperPortal() {
         <AppText variant="muted">/api/partner/v1/docs · /oauth/partner/token · Swagger partner</AppText>
         <AppText variant="muted">{copy.partnersSecretWarning}</AppText>
       </Card>
-    </ScrollView>
+      </FormScreenScroll>
+    </AuthScaffold>
   );
 }
 

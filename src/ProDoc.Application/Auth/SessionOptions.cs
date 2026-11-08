@@ -18,5 +18,15 @@ public sealed class SessionOptions
 
     public int OtpResendCooldownSeconds { get; set; } = 30;
 
+    /// <summary>
+    /// Authorized Super Admin mobile numbers (Indian mobile / E.164). Backend-only allowlist.
+    /// Only these numbers may use Super Admin OTP login; they are never public registration.
+    /// </summary>
+    public string[] SuperAdminPhones { get; set; } = [];
+
+    /// <summary>
+    /// Development-only extra allowlist. Merged into SuperAdminPhones when the host is Development.
+    /// Must remain empty outside Development.
+    /// </summary>
     public string[] DevelopmentAdminPhones { get; set; } = [];
 }

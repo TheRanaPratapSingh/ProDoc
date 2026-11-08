@@ -15,6 +15,7 @@ public sealed class ProviderFlowTests(ProDocApiFactory factory)
     {
         var patient = await SignInAsync("9000000011");
         var other = await SignInAsync("9000000012");
+        var admin = await SignInAsync("9000000001", purpose: "admin");
         var missing = await SendAsync(HttpMethod.Get, "/api/v1/doctors/me", patient.AccessToken);
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
 
@@ -22,6 +23,8 @@ public sealed class ProviderFlowTests(ProDocApiFactory factory)
         var catalog = await specializations.Content.ReadFromJsonAsync<SpecializationBody[]>();
         var cardiology = catalog!.Single(item => item.Code == "cardiology");
 
+        await ProviderSeed.EnsureDoctorRoleAsync(_client, patient.AccessToken, admin.AccessToken);
+        patient = await SignInAsync("9000000011");
         await SendAsync(HttpMethod.Put, "/api/v1/doctors/me/basics", patient.AccessToken, JsonContent.Create(new
         {
             firstName = "Asha",
@@ -96,7 +99,6 @@ public sealed class ProviderFlowTests(ProDocApiFactory factory)
             JsonContent.Create(new { decision = "Approve" }));
         Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
 
-        var admin = await SignInAsync("9000000001");
         var queue = await ReadAsync(await SendAsync(HttpMethod.Get, "/api/v1/admin/verifications?kind=doctor", admin.AccessToken));
         Assert.Contains(queue.EnumerateArray(), item => item.GetProperty("id").GetGuid() == doctorId);
 
@@ -108,9 +110,8 @@ public sealed class ProviderFlowTests(ProDocApiFactory factory)
         Assert.Equal("Approved", approved.GetProperty("status").GetString());
         Assert.True(approved.GetProperty("isPubliclyBookable").GetBoolean());
 
-        var listed = await SendAsync(HttpMethod.Get, "/api/v1/doctors?query=Asha", other.AccessToken);
-        var cards = await listed.Content.ReadFromJsonAsync<JsonElement[]>();
-        Assert.Equal(doctorId, cards!.Single().GetProperty("id").GetGuid());
+        var listedBeforePlace = await SendAsync(HttpMethod.Get, "/api/v1/doctors?query=Asha", other.AccessToken);
+        Assert.Empty((await listedBeforePlace.Content.ReadFromJsonAsync<JsonElement[]>())!);
 
         var photoId = withPhoto.GetProperty("documents").EnumerateArray()
             .Single(item => item.GetProperty("category").GetString() == "ProfilePhoto")
@@ -127,8 +128,8 @@ public sealed class ProviderFlowTests(ProDocApiFactory factory)
         Assert.Equal(HttpStatusCode.OK, ownCertificate.StatusCode);
         Assert.DoesNotContain("provider-documents", photo.Content.Headers.ContentDisposition?.FileName ?? "photo.png");
 
-        var clinic = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/clinics", patient.AccessToken));
-        var clinicId = clinic.GetProperty("id").GetGuid();
+        var ownerUserId = await ProviderSeed.GetUserIdAsync(_client, patient.AccessToken);
+        var clinicId = await ProviderSeed.CreateClinicOwnedByAsync(_client, admin.AccessToken, ownerUserId);
         await SendAsync(HttpMethod.Put, $"/api/v1/clinics/{clinicId}", patient.AccessToken, JsonContent.Create(new
         {
             name = "Rao Clinic",
@@ -171,8 +172,26 @@ public sealed class ProviderFlowTests(ProDocApiFactory factory)
             branchId,
             kind = "Independent"
         }));
-        var secondClinic = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/clinics", patient.AccessToken));
-        var secondClinicId = secondClinic.GetProperty("id").GetGuid();
+        var schedule = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/schedules", patient.AccessToken, JsonContent.Create(new
+        {
+            clinicId,
+            branchId,
+            consultationFee = 500,
+            slotDurationMinutes = 15
+        })));
+        var scheduleId = schedule.GetProperty("id").GetGuid();
+        await SendAsync(HttpMethod.Put, $"/api/v1/schedules/{scheduleId}/hours", patient.AccessToken, JsonContent.Create(new
+        {
+            periods = Enum.GetNames<DayOfWeek>().Select(day => new { day, startsAt = "09:00", endsAt = "12:00" })
+        }));
+        await SendAsync(HttpMethod.Post, $"/api/v1/schedules/{scheduleId}/publication", patient.AccessToken, JsonContent.Create(new { isPublished = true }));
+
+        var listed = await SendAsync(HttpMethod.Get, "/api/v1/doctors?query=Ash", other.AccessToken);
+        var cards = (await listed.Content.ReadFromJsonAsync<JsonElement[]>())!;
+        Assert.Equal(doctorId, cards.Single().GetProperty("id").GetGuid());
+        Assert.Equal("MBBS", cards.Single().GetProperty("qualification").GetString());
+
+        var secondClinicId = await ProviderSeed.CreateClinicOwnedByAsync(_client, admin.AccessToken, ownerUserId);
         await SendAsync(HttpMethod.Put, $"/api/v1/clinics/{secondClinicId}", patient.AccessToken, JsonContent.Create(new
         {
             name = "Camp Hospital",
@@ -229,13 +248,13 @@ public sealed class ProviderFlowTests(ProDocApiFactory factory)
         Assert.Equal(HttpStatusCode.NotFound, unavailable.StatusCode);
     }
 
-    private async Task<SessionBody> SignInAsync(string phone)
+    private async Task<SessionBody> SignInAsync(string phone, string? purpose = null)
     {
-        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone });
+        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone, purpose });
         var otp = await otpResponse.Content.ReadFromJsonAsync<OtpBody>();
         var verifyResponse = await _client.PostAsJsonAsync(
             "/api/v1/auth/otp/verify",
-            new { phoneNumber = phone, code = otp!.DevelopmentCode, deviceName = "integration-test" });
+            new { phoneNumber = phone, code = otp!.DevelopmentCode, deviceName = "integration-test", purpose });
         var session = await verifyResponse.Content.ReadFromJsonAsync<SessionBody>();
         Assert.Equal(HttpStatusCode.OK, verifyResponse.StatusCode);
         return session!;

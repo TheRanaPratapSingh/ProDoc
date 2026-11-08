@@ -35,15 +35,34 @@ public sealed class RequestValidationFilter : IAsyncActionFilter
                     group => group.Key,
                     group => group.Select(error => error.ErrorMessage).ToArray());
 
+            var correlationId = ResolveCorrelationId(context.HttpContext);
+            context.HttpContext.Response.Headers[ApiExceptionHandler.CorrelationHeaderName] = correlationId;
             context.Result = new BadRequestObjectResult(new ValidationProblemDetails(errors)
             {
                 Title = "One or more validation errors occurred.",
                 Status = StatusCodes.Status400BadRequest,
-                Type = "urn:prodoc:validation_failed"
+                Type = "urn:prodoc:validation_failed",
+                Extensions =
+                {
+                    ["code"] = "validation_failed",
+                    ["traceId"] = correlationId,
+                    ["correlationId"] = correlationId
+                }
             });
             return;
         }
 
         await next();
+    }
+
+    private static string ResolveCorrelationId(HttpContext httpContext)
+    {
+        if (httpContext.Request.Headers.TryGetValue(ApiExceptionHandler.CorrelationHeaderName, out var incoming)
+            && !string.IsNullOrWhiteSpace(incoming))
+        {
+            return incoming.ToString();
+        }
+
+        return httpContext.TraceIdentifier;
     }
 }

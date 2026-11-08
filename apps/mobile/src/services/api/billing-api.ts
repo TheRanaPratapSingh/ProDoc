@@ -56,9 +56,21 @@ export type AdminFinanceDashboard = {
   completedEligibleVisits: number;
 };
 
-export function createAppointmentPayment(appointmentId: string, paymentMethod: string, idempotencyKey: string) {
+export function createAppointmentPayment(
+  appointmentId: string,
+  paymentMethod: string,
+  idempotencyKey: string,
+  options?: { couponCode?: string; useRewardCredit?: boolean },
+) {
   return withAuthRetry(async () =>
-    (await api.post<PaymentDetails>(`/api/v1/appointments/${appointmentId}/payments`, { paymentMethod, idempotencyKey })).data,
+    (
+      await api.post<PaymentDetails>(`/api/v1/appointments/${appointmentId}/payments`, {
+        paymentMethod,
+        idempotencyKey,
+        couponCode: options?.couponCode || undefined,
+        useRewardCredit: options?.useRewardCredit ?? false,
+      })
+    ).data,
   );
 }
 

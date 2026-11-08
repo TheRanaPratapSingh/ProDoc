@@ -11,6 +11,7 @@ using ProDoc.Application.Enterprise;
 using ProDoc.Application.Growth;
 using ProDoc.Application.Integrations;
 using ProDoc.Application.Mobile;
+using ProDoc.Application.Notifications;
 using ProDoc.Application.Providers;
 using ProDoc.Application.Support;
 using ProDoc.Application.Queue;
@@ -26,8 +27,11 @@ public static class ApplicationServiceCollectionExtensions
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         services.AddScoped<AuthService>();
+        services.AddScoped<StaffInvitationService>();
+        services.AddScoped<AdminClinicService>();
         services.AddScoped<AccountService>();
         services.AddScoped<DoctorOnboardingService>();
+        services.AddScoped<DoctorPortalService>();
         services.AddScoped<ClinicOnboardingService>();
         services.AddScoped<ProviderDocumentService>();
         services.AddScoped<ProviderDirectoryService>();
@@ -37,10 +41,13 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ClinicOperationsService>();
         services.AddScoped<FavouriteService>();
         services.AddScoped<BookingService>();
+        services.AddScoped<AppointmentShareService>();
         services.AddScoped<IClinicAccess, ClinicAccessService>();
         services.AddScoped<StaffService>();
         services.AddScoped<QueueService>();
+        services.AddScoped<Reception.ReceptionPortalService>();
         services.AddScoped<MedicalService>();
+        services.AddScoped<FollowUpService>();
         services.AddScoped<FinanceService>();
         services.AddScoped<AdminPlatformService>();
         services.AddScoped<AssistantService>();
@@ -50,6 +57,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddSingleton<FhirMappingService>();
         services.AddScoped<IntegrationService>();
         services.AddScoped<MobileDeviceService>();
+        services.AddScoped<NotificationService>();
         services.AddScoped<SupportService>();
         services.AddScoped<IAnalyticsService, AnalyticsService>();
         services.AddScoped<SaaSService>();

@@ -3,13 +3,14 @@ import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { Platform } from 'react-native';
 
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AppText } from '@/components/ui/text';
 import { useCopy } from '@/i18n/copy';
 import { amendPrescription, downloadPrescriptionPdf, getPrescription } from '@/services/api/clinical-api';
 import { problemMessage } from '@/utils/problem';
-import { useSessionStore } from '@/stores/session-store';
+import { useAccountPermissions } from '@/stores/session-store';
 import { useState } from 'react';
 import { TextField } from '@/components/ui/text-field';
 
@@ -17,7 +18,7 @@ export function PrescriptionDetailScreen() {
   const copy = useCopy();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const permissions = useSessionStore((state) => state.account?.permissions ?? []);
+  const permissions = useAccountPermissions();
   const canAmend = permissions.includes('prescriptions.publish');
   const [reason, setReason] = useState('');
   const prescription = useQuery({
@@ -49,8 +50,7 @@ export function PrescriptionDetailScreen() {
 
   return (
     <AuthScaffold>
-      <Button label={copy.back} variant="ghost" onPress={() => router.back()} />
-      <AppText variant="title">{copy.prescriptionDetails}</AppText>
+      <ScreenHeader title={copy.prescriptionDetails} />
       {prescription.data && current ? (
         <Card>
           <AppText variant="title">

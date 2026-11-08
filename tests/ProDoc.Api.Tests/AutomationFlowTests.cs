@@ -16,7 +16,7 @@ public sealed class AutomationFlowTests(ProDocApiFactory factory)
     [Fact]
     public async Task Workflows_preferences_outbox_processing_and_cancel_suppress_reminders()
     {
-        var admin = await SignInAsync("9000000001");
+        var admin = await SignInAsync("9000000001", purpose: "admin");
         var patient = await SignInAsync("9000000191");
         await SendAsync(HttpMethod.Put, "/api/v1/account/profile", patient.AccessToken, JsonContent.Create(new
         {
@@ -93,8 +93,17 @@ public sealed class AutomationFlowTests(ProDocApiFactory factory)
                     appointmentId,
                     accountUserId = patientUserId,
                     userId = patientUserId,
+                    patientName = "Automation Patient",
+                    doctorName = "Dr Test",
+                    clinicName = "Test Clinic",
+                    clinicId = Guid.NewGuid(),
+                    branchId = Guid.NewGuid(),
+                    doctorId = Guid.NewGuid(),
                     status = "Confirmed",
-                    startsAtUtc = DateTimeOffset.UtcNow.AddDays(1)
+                    startsAtUtc = DateTimeOffset.UtcNow.AddDays(1),
+                    endsAtUtc = DateTimeOffset.UtcNow.AddDays(1).AddMinutes(15),
+                    timeZoneId = "Asia/Kolkata",
+                    bookingMode = "TimedSlots"
                 },
                 $"test.confirm:{appointmentId:N}",
                 CancellationToken.None,
@@ -104,10 +113,27 @@ public sealed class AutomationFlowTests(ProDocApiFactory factory)
 
             await bus.PublishAsync(
                 AutomationTriggerTypes.AppointmentCancelled,
-                new { appointmentId, status = "Cancelled", startsAtUtc = DateTimeOffset.UtcNow.AddDays(1) },
+                new
+                {
+                    appointmentId,
+                    accountUserId = patientUserId,
+                    userId = patientUserId,
+                    patientName = "Automation Patient",
+                    doctorName = "Dr Test",
+                    clinicName = "Test Clinic",
+                    clinicId = Guid.NewGuid(),
+                    branchId = Guid.NewGuid(),
+                    doctorId = Guid.NewGuid(),
+                    status = "Cancelled",
+                    startsAtUtc = DateTimeOffset.UtcNow.AddDays(1),
+                    endsAtUtc = DateTimeOffset.UtcNow.AddDays(1).AddMinutes(15),
+                    timeZoneId = "Asia/Kolkata",
+                    bookingMode = "TimedSlots"
+                },
                 $"test.cancel:{appointmentId:N}",
                 CancellationToken.None,
-                subjectId: appointmentId);
+                subjectId: appointmentId,
+                userId: patientUserId);
             await automation.ProcessDueAsync(CancellationToken.None);
 
             // Duplicate publish is idempotent.
@@ -119,6 +145,13 @@ public sealed class AutomationFlowTests(ProDocApiFactory factory)
                 subjectId: appointmentId);
         }
 
+        var inbox = await ReadArrayAsync(await SendAsync(HttpMethod.Get, "/api/v1/notifications/me", patient.AccessToken));
+        Assert.Contains(inbox, item => item.GetProperty("kind").GetString() == "appointment.confirmed"
+            || item.GetProperty("kind").GetString() == "appointment.cancelled");
+
+        var unread = await ReadAsync(await SendAsync(HttpMethod.Get, "/api/v1/notifications/me/unread-count", patient.AccessToken));
+        Assert.True(unread.GetProperty("count").GetInt32() >= 1);
+
         var outbox = await ReadArrayAsync(await SendAsync(HttpMethod.Get, "/api/v1/automation/outbox", admin.AccessToken));
         Assert.Contains(outbox, item => item.GetProperty("eventType").GetString() == "appointment.confirmed");
         Assert.Contains(outbox, item => item.GetProperty("eventType").GetString() == "appointment.cancelled");
@@ -127,9 +160,9 @@ public sealed class AutomationFlowTests(ProDocApiFactory factory)
         Assert.NotEmpty(runs);
     }
 
-    private async Task<SessionBody> SignInAsync(string phone)
+    private async Task<SessionBody> SignInAsync(string phone, string? purpose = null)
     {
-        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone });
+        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone, purpose });
         var otpBody = await otpResponse.Content.ReadAsStringAsync();
         Assert.True(otpResponse.IsSuccessStatusCode, otpBody);
         var otp = JsonSerializer.Deserialize<OtpBody>(otpBody, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -138,7 +171,8 @@ public sealed class AutomationFlowTests(ProDocApiFactory factory)
         {
             phoneNumber = phone,
             code = otp!.DevelopmentCode,
-            deviceName = "automation-test"
+            deviceName = "automation-test",
+            purpose
         });
         var verifyBody = await verify.Content.ReadAsStringAsync();
         Assert.True(verify.IsSuccessStatusCode, verifyBody);

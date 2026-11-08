@@ -1,7 +1,9 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ProDoc.Api.Auth;
 using ProDoc.Api.Contracts;
 using ProDoc.Application.Providers;
+using ProDoc.Application.Queue;
 using ProDoc.Domain.Common;
 using ProDoc.Domain.Identity;
 using ProDoc.Domain.Providers;
@@ -10,7 +12,11 @@ namespace ProDoc.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/doctors")]
-public sealed class DoctorsController(DoctorOnboardingService doctors, ProviderDirectoryService directory, ProviderDocumentService documents)
+public sealed class DoctorsController(
+    DoctorOnboardingService doctors,
+    DoctorPortalService portal,
+    ProviderDirectoryService directory,
+    ProviderDocumentService documents)
     : ControllerBase
 {
     [HasPermission(PermissionCodes.ProviderOnboard)]
@@ -21,10 +27,48 @@ public sealed class DoctorsController(DoctorOnboardingService doctors, ProviderD
         return profile is null ? NotFound() : Ok(profile);
     }
 
+    [Authorize]
+    [HttpGet("me/dashboard")]
+    public Task<DoctorDashboard> Dashboard([FromQuery] Guid? clinicId, CancellationToken cancellationToken) =>
+        portal.GetDashboardAsync(User.GetUserId(), clinicId, cancellationToken);
+
+    [Authorize]
+    [HttpGet("me/clinics")]
+    public Task<IReadOnlyList<DoctorClinicOption>> Clinics(CancellationToken cancellationToken) =>
+        portal.ListClinicsAsync(User.GetUserId(), cancellationToken);
+
+    [Authorize]
+    [HttpGet("me/earnings")]
+    public Task<DoctorEarningsDashboard> Earnings([FromQuery] Guid? clinicId, CancellationToken cancellationToken) =>
+        portal.GetEarningsAsync(User.GetUserId(), clinicId, cancellationToken);
+
+    [Authorize]
+    [HttpGet("me/patients")]
+    public Task<IReadOnlyList<DoctorPatientRow>> Patients([FromQuery] Guid? clinicId, CancellationToken cancellationToken) =>
+        portal.ListPatientsAsync(User.GetUserId(), clinicId, cancellationToken);
+
+    [Authorize]
+    [HttpGet("me/prescriptions")]
+    public Task<IReadOnlyList<DoctorPrescriptionRow>> Prescriptions([FromQuery] Guid? clinicId, CancellationToken cancellationToken) =>
+        portal.ListPrescriptionsAsync(User.GetUserId(), clinicId, cancellationToken);
+
+    [Authorize]
+    [HttpGet("me/notifications")]
+    public Task<IReadOnlyList<NotificationDetails>> Notifications(CancellationToken cancellationToken) =>
+        portal.ListNotificationsAsync(User.GetUserId(), cancellationToken);
+
     [HasPermission(PermissionCodes.ProviderOnboard)]
     [HttpPut("me/basics")]
-    public async Task<ActionResult<DoctorProfile>> Basics(DoctorBasicsRequest request, CancellationToken cancellationToken) =>
-        Ok(await doctors.SaveBasicsAsync(
+    public async Task<ActionResult<DoctorProfile>> Basics(DoctorBasicsRequest request, CancellationToken cancellationToken)
+    {
+        var existing = await doctors.FindMineAsync(User.GetUserId(), cancellationToken);
+        var allowCreate = existing is null && CanCreateDoctorProfile();
+        if (existing is null && !allowCreate)
+        {
+            return Forbid();
+        }
+
+        return Ok(await doctors.SaveBasicsAsync(
             User.GetUserId(),
             request.FirstName,
             request.LastName,
@@ -32,7 +76,9 @@ public sealed class DoctorsController(DoctorOnboardingService doctors, ProviderD
             request.Gender,
             request.Email,
             request.PreferredLanguage,
-            cancellationToken));
+            cancellationToken,
+            allowCreate));
+    }
 
     [HasPermission(PermissionCodes.ProviderOnboard)]
     [HttpPut("me/professional")]
@@ -136,6 +182,23 @@ public sealed class DoctorsController(DoctorOnboardingService doctors, ProviderD
         Ok(await directory.GetDoctorAsync(doctorId, cancellationToken));
 
     private RequestMetadata Metadata() => new(ClientContext.IpAddress(HttpContext), ClientContext.UserAgent(HttpContext));
+
+    /// <summary>
+    /// New doctor profiles may be created by Super Admin (<see cref="PermissionCodes.DoctorCreate"/>)
+    /// or by users who already hold the Doctor role (invited doctors completing onboarding).
+    /// Patients and other roles cannot mint a doctor profile.
+    /// </summary>
+    private bool CanCreateDoctorProfile()
+    {
+        if (User.Claims.Any(claim => claim.Type == "perm" && claim.Value == PermissionCodes.DoctorCreate))
+        {
+            return true;
+        }
+
+        return User.Claims.Any(claim =>
+            (claim.Type is "role" or System.Security.Claims.ClaimTypes.Role)
+            && string.Equals(claim.Value, RoleNames.Doctor, StringComparison.Ordinal));
+    }
 
     private static TEnum ParseEnum<TEnum>(string? value, string code, string title)
         where TEnum : struct, Enum

@@ -19,15 +19,27 @@ public sealed class ClinicBranch
 
     public string? AddressLine2 { get; private set; }
 
+    public string? Landmark { get; private set; }
+
+    public string? Locality { get; private set; }
+
     public string City { get; private set; } = string.Empty;
+
+    public string? District { get; private set; }
 
     public string State { get; private set; } = string.Empty;
 
     public string PostalCode { get; private set; } = string.Empty;
 
+    public string Country { get; private set; } = PracticeLocation.DefaultCountry;
+
     public decimal? Latitude { get; private set; }
 
     public decimal? Longitude { get; private set; }
+
+    public string? GooglePlaceId { get; private set; }
+
+    public DateTimeOffset? LocationUpdatedAtUtc { get; private set; }
 
     public string? PhoneNumber { get; private set; }
 
@@ -35,18 +47,38 @@ public sealed class ClinicBranch
 
     public bool IsActive { get; private set; }
 
+    public string FormattedAddress =>
+        PracticeLocation.FormatFull(
+            AddressLine,
+            AddressLine2,
+            Landmark,
+            Locality,
+            City,
+            District,
+            State,
+            PostalCode,
+            Country);
+
+    public string CompactAddress => PracticeLocation.FormatCompact(Locality, City, PostalCode);
+
     internal static ClinicBranch Create(
         Guid clinicId,
         string name,
         string addressLine,
         string? addressLine2,
+        string? landmark,
+        string? locality,
         string city,
+        string? district,
         string state,
         string postalCode,
+        string? country,
         decimal? latitude,
         decimal? longitude,
+        string? googlePlaceId,
         string? phoneNumber,
-        bool isPrimary)
+        bool isPrimary,
+        DateTimeOffset? locationUpdatedAtUtc)
     {
         return new ClinicBranch
         {
@@ -55,11 +87,17 @@ public sealed class ClinicBranch
             Name = name,
             AddressLine = addressLine,
             AddressLine2 = addressLine2,
+            Landmark = landmark,
+            Locality = locality,
             City = city,
+            District = district,
             State = state,
             PostalCode = postalCode,
+            Country = string.IsNullOrWhiteSpace(country) ? PracticeLocation.DefaultCountry : country.Trim(),
             Latitude = latitude,
             Longitude = longitude,
+            GooglePlaceId = googlePlaceId,
+            LocationUpdatedAtUtc = locationUpdatedAtUtc,
             PhoneNumber = phoneNumber,
             IsPrimary = isPrimary,
             IsActive = true
@@ -74,22 +112,34 @@ public sealed class ClinicBranch
         string name,
         string addressLine,
         string? addressLine2,
+        string? landmark,
+        string? locality,
         string city,
+        string? district,
         string state,
         string postalCode,
+        string? country,
         decimal? latitude,
         decimal? longitude,
+        string? googlePlaceId,
         string? phoneNumber,
-        bool isPrimary)
+        bool isPrimary,
+        DateTimeOffset? locationUpdatedAtUtc)
     {
         Name = name;
         AddressLine = addressLine;
         AddressLine2 = addressLine2;
+        Landmark = landmark;
+        Locality = locality;
         City = city;
+        District = district;
         State = state;
         PostalCode = postalCode;
+        Country = string.IsNullOrWhiteSpace(country) ? PracticeLocation.DefaultCountry : country.Trim();
         Latitude = latitude;
         Longitude = longitude;
+        GooglePlaceId = googlePlaceId;
+        LocationUpdatedAtUtc = locationUpdatedAtUtc;
         PhoneNumber = phoneNumber;
         IsPrimary = isPrimary;
         IsActive = true;
@@ -194,6 +244,17 @@ public sealed class Clinic
         Touch(now);
     }
 
+    public void TransferOwnership(Guid newOwnerUserId, DateTimeOffset now)
+    {
+        if (newOwnerUserId == Guid.Empty)
+        {
+            throw DomainException.Validation("owner_invalid", "Choose a valid owner.");
+        }
+
+        OwnerUserId = newOwnerUserId;
+        Touch(now);
+    }
+
     public void DetachFromOrganization(DateTimeOffset now)
     {
         OrganizationId = null;
@@ -255,10 +316,31 @@ public sealed class Clinic
         decimal? longitude,
         string? phoneNumber,
         bool isPrimary,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        string? landmark = null,
+        string? locality = null,
+        string? district = null,
+        string? country = null,
+        string? googlePlaceId = null)
     {
         EnsureEditable();
-        var branch = BuildBranch(name, addressLine, addressLine2, city, state, postalCode, latitude, longitude, phoneNumber, isPrimary || _branches.All(item => !item.IsActive));
+        var branch = BuildBranch(
+            name,
+            addressLine,
+            addressLine2,
+            landmark,
+            locality,
+            city,
+            district,
+            state,
+            postalCode,
+            country,
+            latitude,
+            longitude,
+            googlePlaceId,
+            phoneNumber,
+            isPrimary || _branches.All(item => !item.IsActive),
+            now);
         if (branch.IsPrimary)
         {
             foreach (var existing in _branches)
@@ -284,12 +366,33 @@ public sealed class Clinic
         decimal? longitude,
         string? phoneNumber,
         bool isPrimary,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        string? landmark = null,
+        string? locality = null,
+        string? district = null,
+        string? country = null,
+        string? googlePlaceId = null)
     {
         EnsureEditable();
         var branch = _branches.SingleOrDefault(item => item.Id == branchId)
             ?? throw DomainException.NotFound("branch_not_found", "That branch was not found.");
-        var updated = BuildBranch(name, addressLine, addressLine2, city, state, postalCode, latitude, longitude, phoneNumber, isPrimary);
+        var updated = BuildBranch(
+            name,
+            addressLine,
+            addressLine2,
+            landmark,
+            locality,
+            city,
+            district,
+            state,
+            postalCode,
+            country,
+            latitude,
+            longitude,
+            googlePlaceId,
+            phoneNumber,
+            isPrimary,
+            now);
         if (updated.IsPrimary)
         {
             foreach (var existing in _branches)
@@ -302,13 +405,19 @@ public sealed class Clinic
             updated.Name,
             updated.AddressLine,
             updated.AddressLine2,
+            updated.Landmark,
+            updated.Locality,
             updated.City,
+            updated.District,
             updated.State,
             updated.PostalCode,
+            updated.Country,
             updated.Latitude,
             updated.Longitude,
+            updated.GooglePlaceId,
             updated.PhoneNumber,
-            updated.IsPrimary);
+            updated.IsPrimary,
+            updated.LocationUpdatedAtUtc);
         if (!_branches.Any(item => item.IsActive && item.IsPrimary))
         {
             branch.SetPrimary(true);
@@ -385,6 +494,26 @@ public sealed class Clinic
         Status = VerificationStatus.Submitted;
         SubmittedAtUtc = now;
         ReviewedAtUtc = null;
+        RejectionReason = null;
+        Touch(now);
+    }
+
+    /// <summary>Platform-admin provisioned clinics skip the verification queue when basics are complete.</summary>
+    public void ProvisionApproved(DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(Name) || Type is null || PhoneNumber is null)
+        {
+            throw DomainException.Validation("application_incomplete", "Add the clinic name, type, and contact number.");
+        }
+
+        if (!_branches.Any(branch => branch.IsActive && branch.IsPrimary))
+        {
+            throw DomainException.Validation("application_incomplete", "Add a primary branch before activating the clinic.");
+        }
+
+        Status = VerificationStatus.Approved;
+        SubmittedAtUtc ??= now;
+        ReviewedAtUtc = now;
         RejectionReason = null;
         Touch(now);
     }
@@ -481,33 +610,41 @@ public sealed class Clinic
         string name,
         string addressLine,
         string? addressLine2,
+        string? landmark,
+        string? locality,
         string city,
+        string? district,
         string state,
         string postalCode,
+        string? country,
         decimal? latitude,
         decimal? longitude,
+        string? googlePlaceId,
         string? phoneNumber,
-        bool isPrimary)
+        bool isPrimary,
+        DateTimeOffset now)
     {
-        if ((latitude is null) != (longitude is null)
-            || latitude is < -90 or > 90
-            || longitude is < -180 or > 180)
-        {
-            throw DomainException.Validation("location_invalid", "Enter both latitude and longitude, or leave both empty.");
-        }
+        PracticeLocation.EnsureCoordinates(latitude, longitude);
 
         return ClinicBranch.Create(
             Id,
             ProviderText.Required(name, 120, "branch_invalid", "Enter the branch name."),
             ProviderText.Required(addressLine, 200, "branch_invalid", "Enter the address."),
             ProviderText.Optional(addressLine2, 200, "branch_invalid", "Enter an address of 200 characters or fewer."),
+            ProviderText.Optional(landmark, 160, "branch_invalid", "Enter a landmark of 160 characters or fewer."),
+            ProviderText.Optional(locality, 120, "branch_invalid", "Enter a locality of 120 characters or fewer."),
             ProviderText.Required(city, 80, "branch_invalid", "Enter the city."),
+            ProviderText.Optional(district, 80, "branch_invalid", "Enter a district of 80 characters or fewer."),
             ProviderText.Required(state, 80, "branch_invalid", "Enter the state."),
             ProviderText.PostalCode(postalCode),
+            ProviderText.Optional(country, 80, "branch_invalid", "Enter a country of 80 characters or fewer.")
+                ?? PracticeLocation.DefaultCountry,
             latitude,
             longitude,
+            PracticeLocation.OptionalGooglePlaceId(googlePlaceId),
             string.IsNullOrWhiteSpace(phoneNumber) ? null : Identity.PhoneNumber.ParseIndianMobile(phoneNumber).E164,
-            isPrimary);
+            isPrimary,
+            latitude is null ? null : now);
     }
 
     private void EnsureEditable()

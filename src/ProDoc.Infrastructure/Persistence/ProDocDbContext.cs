@@ -37,6 +37,8 @@ public sealed class ProDocDbContext : IdentityDbContext<ApplicationUser, Identit
 
     public DbSet<OtpChallenge> OtpChallenges => Set<OtpChallenge>();
 
+    public DbSet<StaffInvitation> StaffInvitations => Set<StaffInvitation>();
+
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
     public DbSet<Permission> Permissions => Set<Permission>();
@@ -69,9 +71,13 @@ public sealed class ProDocDbContext : IdentityDbContext<ApplicationUser, Identit
 
     public DbSet<Appointment> Appointments => Set<Appointment>();
 
+    public DbSet<AppointmentShareLink> AppointmentShareLinks => Set<AppointmentShareLink>();
+
     public DbSet<FamilyMember> FamilyMembers => Set<FamilyMember>();
 
     public DbSet<ClinicStaffMember> ClinicStaffMembers => Set<ClinicStaffMember>();
+
+    public DbSet<ReceptionistDoctorAssignment> ReceptionistDoctorAssignments => Set<ReceptionistDoctorAssignment>();
 
     public DbSet<ClinicQueueSettings> ClinicQueueSettings => Set<ClinicQueueSettings>();
 
@@ -106,6 +112,10 @@ public sealed class ProDocDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<ConsultationRecord> ConsultationRecords => Set<ConsultationRecord>();
 
     public DbSet<ConsultationDiagnosis> ConsultationDiagnoses => Set<ConsultationDiagnosis>();
+
+    public DbSet<PatientFollowUp> PatientFollowUps => Set<PatientFollowUp>();
+
+    public DbSet<FollowUpReminder> FollowUpReminders => Set<FollowUpReminder>();
 
     public DbSet<Prescription> Prescriptions => Set<Prescription>();
 
@@ -247,6 +257,8 @@ public sealed class ProDocDbContext : IdentityDbContext<ApplicationUser, Identit
 
     public DbSet<HelpArticle> HelpArticles => Set<HelpArticle>();
 
+    public DbSet<HelpArticleFeedback> HelpArticleFeedback => Set<HelpArticleFeedback>();
+
     public DbSet<SupportAttachment> SupportAttachments => Set<SupportAttachment>();
 
     public DbSet<TicketStatusHistory> TicketStatusHistory => Set<TicketStatusHistory>();
@@ -260,6 +272,7 @@ public sealed class ProDocDbContext : IdentityDbContext<ApplicationUser, Identit
         {
             entity.ToTable("Users");
             entity.Property(user => user.SuspensionReason).HasMaxLength(240);
+            entity.HasIndex(user => user.PermanentlyDeletedAtUtc);
         });
         builder.Entity<IdentityRole<Guid>>().ToTable("Roles");
         builder.Entity<IdentityUserRole<Guid>>().ToTable("UserRoles");

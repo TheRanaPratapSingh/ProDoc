@@ -1,0 +1,8 @@
+import { ReceptionReports } from '@/features/reception/reception-modules';
+import { useRequireSurface } from '@/navigation/use-require-surface';
+
+export default function ReceptionReportsRoute() {
+  const { ready } = useRequireSurface('reception');
+  if (!ready) return null;
+  return <ReceptionReports />;
+}

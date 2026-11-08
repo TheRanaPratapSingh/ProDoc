@@ -3,6 +3,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 import type { AuthSession } from '@/services/api/types';
+import { isRetryableApiError } from '@/utils/problem';
 
 function expoDevHost(): string | null {
   const candidates = [
@@ -65,7 +66,10 @@ export const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-type RetryConfig = InternalAxiosRequestConfig & { retried?: boolean };
+type RetryConfig = InternalAxiosRequestConfig & {
+  retried?: boolean;
+  transientRetried?: boolean;
+};
 
 type AuthBridge = {
   getAccessToken: () => string | null;
@@ -87,7 +91,18 @@ export async function refreshSession(refreshToken: string) {
     { refreshToken },
     { timeout: 15000 },
   );
-  return response.data;
+  const session = response.data;
+  return {
+    ...session,
+    account: {
+      ...session.account,
+      preferredLanguage: session.account.preferredLanguage === 'hi' ? 'hi' : 'en',
+      homeSurface: session.account.homeSurface || 'patient',
+      availableSurfaces: session.account.availableSurfaces?.length
+        ? session.account.availableSurfaces
+        : [session.account.homeSurface || 'patient'],
+    },
+  } satisfies AuthSession;
 }
 
 async function refreshOnce(refreshToken: string) {
@@ -109,6 +124,15 @@ async function refreshOnce(refreshToken: string) {
   return refreshTask;
 }
 
+function isIdempotentMethod(method?: string) {
+  const normalized = (method ?? 'get').toLowerCase();
+  return normalized === 'get' || normalized === 'head' || normalized === 'options';
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 api.interceptors.request.use((config) => {
   const token = bridge?.getAccessToken();
   if (token) {
@@ -123,17 +147,32 @@ api.interceptors.response.use(
     const config = error.config as RetryConfig | undefined;
     const refreshToken = bridge?.getRefreshToken();
     const isRefresh = config?.url?.includes('/auth/refresh');
-    if (error.response?.status !== 401 || !config || config.retried || isRefresh || !refreshToken) {
-      throw error;
+
+    // Session refresh on 401 (once).
+    if (error.response?.status === 401 && config && !config.retried && !isRefresh && refreshToken) {
+      config.retried = true;
+      const session = await refreshOnce(refreshToken);
+      if (!session) {
+        throw error;
+      }
+
+      config.headers.Authorization = `Bearer ${session.accessToken}`;
+      return api(config);
     }
 
-    config.retried = true;
-    const session = await refreshOnce(refreshToken);
-    if (!session) {
-      throw error;
+    // Single transient retry for safe/idempotent reads only (network/timeout/5xx).
+    if (
+      config &&
+      !config.transientRetried &&
+      isIdempotentMethod(config.method) &&
+      isRetryableApiError(error) &&
+      error.response?.status !== 401
+    ) {
+      config.transientRetried = true;
+      await sleep(400);
+      return api(config);
     }
 
-    config.headers.Authorization = `Bearer ${session.accessToken}`;
-    return api(config);
+    throw error;
   },
 );

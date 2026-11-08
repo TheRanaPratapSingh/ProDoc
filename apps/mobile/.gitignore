@@ -42,3 +42,8 @@ example
 # generated native folders
 /ios
 /android
+
+# local size-audit / export artifacts (never commit)
+.audit-export-android/
+.audit-export-ios/
+.audit-export-*/

@@ -14,13 +14,20 @@ public sealed record ReferralDashboard(
 public sealed record ReferralItem(
     Guid Id,
     string Status,
+    string DisplayStatus,
+    string ReferredLabel,
     DateTimeOffset RegisteredAtUtc,
     DateTimeOffset? ConvertedAtUtc,
-    DateTimeOffset? RewardedAtUtc);
+    DateTimeOffset? RewardedAtUtc,
+    int? RewardPointsCredited);
 
 public sealed record RewardWalletDetails(
     int PointsBalance,
     decimal CreditBalanceInr,
+    int PointsEarnedTotal,
+    int PointsRedeemedTotal,
+    int PointsPerInr,
+    decimal RedeemableCreditValueInr,
     IReadOnlyList<RewardLedgerItem> History);
 
 public sealed record RewardLedgerItem(
@@ -51,7 +58,11 @@ public sealed record CouponDetails(
     int RedemptionCount,
     DateTimeOffset StartsAtUtc,
     DateTimeOffset EndsAtUtc,
-    bool IsActive);
+    bool IsActive,
+    int UserRedemptionCount = 0,
+    bool AlreadyUsed = false,
+    bool EligibleForUser = true,
+    string? EligibilityNote = null);
 
 public sealed record CouponPreview(
     string Code,

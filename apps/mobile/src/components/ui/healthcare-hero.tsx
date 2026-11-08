@@ -1,11 +1,48 @@
-import { View } from 'react-native';
+import { Image } from 'expo-image';
+import { useWindowDimensions, View } from 'react-native';
 import Svg, { Circle, Ellipse, Path, Rect } from 'react-native-svg';
 
 import { useProdocTheme } from '@/theme/prodoc-theme';
 
-/** Friendly doctor illustration for auth and empty marketing surfaces. */
-export function HealthcareHero({ height = 180 }: { height?: number }) {
+const loginHero = require('../../../assets/images/login-healthcare-hero.jpg');
+
+type HealthcareHeroProps = {
+  height?: number;
+  /** Prefer the photographic/illustration asset on auth screens. */
+  variant?: 'illustration' | 'vector';
+};
+
+/** Healthcare visual for auth and marketing surfaces. */
+export function HealthcareHero({ height = 148, variant = 'illustration' }: HealthcareHeroProps) {
   const theme = useProdocTheme();
+  const { width: screenWidth } = useWindowDimensions();
+  const maxWidth = Math.min(screenWidth - 48, 320);
+  const imageHeight = Math.min(height, 160);
+
+  if (variant === 'illustration') {
+    return (
+      <View
+        accessible={false}
+        style={{
+          width: '100%',
+          maxWidth,
+          height: imageHeight,
+          alignSelf: 'center',
+          borderRadius: 20,
+          overflow: 'hidden',
+          backgroundColor: theme.colors.primaryLight,
+        }}>
+        <Image
+          source={loginHero}
+          style={{ width: '100%', height: '100%' }}
+          contentFit="contain"
+          transition={180}
+          accessibilityIgnoresInvertColors
+        />
+      </View>
+    );
+  }
+
   const width = Math.round(height * 1.35);
 
   return (
@@ -13,10 +50,7 @@ export function HealthcareHero({ height = 180 }: { height?: number }) {
       <Svg width={width} height={height} viewBox="0 0 270 200">
         <Ellipse cx="135" cy="168" rx="88" ry="14" fill={theme.colors.primaryLight} />
         <Circle cx="135" cy="78" r="62" fill={theme.colors.softBlue} />
-        <Path
-          d="M88 148c8-34 28-48 47-48s39 14 47 48"
-          fill={theme.colors.primary}
-        />
+        <Path d="M88 148c8-34 28-48 47-48s39 14 47 48" fill={theme.colors.primary} />
         <Circle cx="135" cy="72" r="28" fill="#F5D0B5" />
         <Path d="M110 58c8-18 42-18 50 0-6 10-14 14-25 14s-19-4-25-14z" fill={theme.colors.brandEnd} />
         <Rect x="122" y="96" width="26" height="34" rx="6" fill="#FFFFFF" opacity={0.92} />

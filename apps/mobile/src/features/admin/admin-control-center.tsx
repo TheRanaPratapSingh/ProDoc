@@ -1,15 +1,38 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter, type Href } from 'expo-router';
-import { useMemo, useState } from 'react';
-import { Linking, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { BackHandler, Linking, Pressable, View } from 'react-native';
 
-import { Screen } from '@/components/layout/auth-scaffold';
+import { AdminChartCard } from '@/components/admin/admin-chart-card';
+import {
+  AdminIconAudit,
+  AdminIconAutomation,
+  AdminIconChart,
+  AdminIconConfig,
+  AdminIconFinance,
+  AdminIconGrowth,
+  AdminIconOps,
+  AdminIconOverview,
+  AdminIconPartners,
+  AdminIconProviders,
+  AdminIconShield,
+  AdminIconStar,
+  AdminIconSupport,
+  AdminIconTenants,
+  AdminIconUsers,
+} from '@/components/admin/admin-icons';
+import { AdminKpiCard } from '@/components/admin/admin-kpi-card';
+import { AdminPanel, AdminShell, AdminSkeleton, type AdminNavItem } from '@/components/admin/admin-shell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { DashboardStatCard } from '@/components/ui/stat-card';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { AppText } from '@/components/ui/text';
 import { TextField } from '@/components/ui/text-field';
+import { AdminClinicsPanel } from '@/features/admin/admin-clinics';
+import { AdminCreateUserPanel } from '@/features/admin/admin-create-user';
+import { AdminManageUsersPanel } from '@/features/admin/admin-manage-users';
 import { useCopy } from '@/i18n/copy';
+import { logout } from '@/services/api/auth-api';
 import {
   financeCsvUrl,
   getAdminDashboard,
@@ -20,9 +43,6 @@ import {
   listAudit,
   listFeatureFlags,
   listPlatformSettings,
-  reactivateUser,
-  searchAdminUsers,
-  suspendUser,
   updateAdminTicket,
   upsertFeatureFlag,
   upsertPlatformSetting,
@@ -46,6 +66,7 @@ import {
 } from '@/services/api/automation-api';
 import { decidePartner, getPartnerPlatformStats, listAdminPartners } from '@/services/api/partners-api';
 import {
+  createAdminCoupon,
   getGrowthDashboard,
   listAdminCampaigns,
   listAdminCoupons,
@@ -53,15 +74,17 @@ import {
   setCouponActive,
 } from '@/services/api/growth-api';
 import { listModerationReviews, moderateReview } from '@/services/api/review-api';
-import { useSessionStore } from '@/stores/session-store';
+import { clearSession, useAccountPermissions, useSessionStore } from '@/stores/session-store';
 import { useProdocTheme } from '@/theme/prodoc-theme';
-import { breakpoint, radius, spacing } from '@/theme/tokens';
+import { spacing } from '@/theme/tokens';
 import { problemMessage } from '@/utils/problem';
 
 type Section =
   | 'overview'
   | 'analytics'
-  | 'users'
+  | 'users-create'
+  | 'users-manage'
+  | 'clinics'
   | 'providers'
   | 'verification'
   | 'ops'
@@ -85,43 +108,25 @@ function isoToday() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function MetricCard({ label, value }: { label: string; value: string }) {
-  return <DashboardStatCard label={label} value={value} />;
+function MetricCard({ label, value, hint, icon }: { label: string; value: string; hint?: string; icon?: ReactNode }) {
+  return <AdminKpiCard label={label} value={value} hint={hint} icon={icon} />;
 }
 
 function BarChart({ title, rows, kind }: { title: string; rows: NamedCount[] | NamedAmount[]; kind: 'count' | 'amount' }) {
-  const theme = useProdocTheme();
-  const max = Math.max(
-    1,
-    ...rows.map((row) => (kind === 'count' ? (row as NamedCount).count : Number((row as NamedAmount).amount))),
-  );
-
   return (
-    <Card>
-      <AppText variant="label">{title}</AppText>
-      {rows.length === 0 ? <AppText variant="muted">—</AppText> : null}
-      {rows.map((row) => {
-        const value = kind === 'count' ? (row as NamedCount).count : Number((row as NamedAmount).amount);
-        const width = `${Math.max(8, Math.round((value / max) * 100))}%`;
-        return (
-          <View key={row.label} style={{ gap: spacing.xs }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-              <AppText variant="muted">{row.label}</AppText>
-              <AppText>{kind === 'amount' ? `₹${value.toFixed(0)}` : value}</AppText>
-            </View>
-            <View style={{ height: 8, borderRadius: radius.sm, backgroundColor: theme.colors.border, overflow: 'hidden' }}>
-              <View style={{ width: width as `${number}%`, height: 8, backgroundColor: theme.colors.primary }} />
-            </View>
-          </View>
-        );
-      })}
-    </Card>
+    <AdminChartCard
+      title={title}
+      rows={rows.map((row) => ({
+        label: row.label,
+        value: kind === 'count' ? (row as NamedCount).count : Number((row as NamedAmount).amount),
+      }))}
+      formatValue={kind === 'amount' ? (value) => `₹${value.toFixed(0)}` : undefined}
+    />
   );
 }
 
 function Skeleton() {
-  const theme = useProdocTheme();
-  return <View style={{ height: 72, borderRadius: radius.md, backgroundColor: theme.colors.border, opacity: 0.5 }} />;
+  return <AdminSkeleton height={88} />;
 }
 
 export function AdminControlCenter() {
@@ -129,21 +134,81 @@ export function AdminControlCenter() {
   const router = useRouter();
   const theme = useProdocTheme();
   const queryClient = useQueryClient();
-  const { width } = useWindowDimensions();
-  const wide = width >= breakpoint.wide;
-  const permissions = useSessionStore((state) => state.account?.permissions ?? []);
+  const permissions = useAccountPermissions();
+  const refreshToken = useSessionStore((state) => state.refreshToken);
+  const iconColor = theme.colors.textMuted;
+  const iconActive = theme.colors.primary;
   const [section, setSection] = useState<Section>('overview');
+  const [sectionHistory, setSectionHistory] = useState<Section[]>([]);
+  const backLock = useRef(false);
   const [stateFilter, setStateFilter] = useState('');
   const [cityFilter, setCityFilter] = useState('');
-  const [userQuery, setUserQuery] = useState('');
-  const [suspendReason, setSuspendReason] = useState('');
-  const [confirmUserId, setConfirmUserId] = useState<string | null>(null);
   const [ticketNote, setTicketNote] = useState('');
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [settingDrafts, setSettingDrafts] = useState<Record<string, string>>({});
   const [moderationReason, setModerationReason] = useState('');
   const [biFrom, setBiFrom] = useState(isoDaysAgo(30));
   const [biTo, setBiTo] = useState(isoToday());
+  const [couponCode, setCouponCode] = useState('');
+  const [couponName, setCouponName] = useState('');
+  const [couponValue, setCouponValue] = useState('10');
+
+  const goToSection = useCallback((id: Section) => {
+    setSection((current) => {
+      if (current === id) {
+        return current;
+      }
+      setSectionHistory((history) => [...history, current]);
+      return id;
+    });
+  }, []);
+
+  const handleAdminBack = useCallback(() => {
+    if (backLock.current) {
+      return true;
+    }
+
+    if (sectionHistory.length > 0) {
+      backLock.current = true;
+      setTimeout(() => {
+        backLock.current = false;
+      }, 400);
+      const previous = sectionHistory[sectionHistory.length - 1]!;
+      setSectionHistory((history) => history.slice(0, -1));
+      setSection(previous);
+      return true;
+    }
+
+    if (section !== 'overview') {
+      backLock.current = true;
+      setTimeout(() => {
+        backLock.current = false;
+      }, 400);
+      setSection('overview');
+      return true;
+    }
+
+    // Admin landing: never replace('/admin') again. Let Android exit if needed.
+    return false;
+  }, [section, sectionHistory]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => handleAdminBack());
+    return () => sub.remove();
+  }, [handleAdminBack]);
+
+  const signOut = useMutation({
+    mutationFn: async () => {
+      if (refreshToken) {
+        await logout(refreshToken);
+      }
+    },
+    onSettled: async () => {
+      await clearSession();
+      queryClient.clear();
+      router.replace('/admin-sign-in');
+    },
+  });
 
   const canUsers = permissions.includes('admin.users');
   const canSupport = permissions.includes('admin.support');
@@ -159,23 +224,45 @@ export function AdminControlCenter() {
   const canAutomation = permissions.includes('automation.manage');
   const canPartners = permissions.includes('partners.manage');
 
-  const nav: { id: Section; label: string; visible: boolean }[] = [
-    { id: 'overview', label: copy.adminOverview, visible: true },
-    { id: 'analytics', label: copy.biTitle, visible: canAnalytics },
-    { id: 'users', label: copy.adminUsers, visible: canUsers },
-    { id: 'providers', label: copy.adminProviders, visible: true },
-    { id: 'verification', label: copy.reviews, visible: canVerify },
-    { id: 'ops', label: copy.adminOps, visible: true },
-    { id: 'finance', label: copy.adminFinanceReports, visible: canFinance },
-    { id: 'support', label: copy.adminSupport, visible: canSupport },
-    { id: 'moderation', label: copy.reviewModeration, visible: canModerateReviews },
-    { id: 'growth', label: copy.growthAdmin, visible: canGrowth },
-    { id: 'tenants', label: copy.tenantsAdmin, visible: canTenants },
-    { id: 'automation', label: copy.automationTitle, visible: canAutomation },
-    { id: 'partners', label: copy.partnersAdmin, visible: canPartners },
-    { id: 'config', label: copy.adminConfig, visible: canConfig },
-    { id: 'audit', label: copy.adminAudit, visible: canAudit },
+  const nav: AdminNavItem[] = [
+    { id: 'overview', label: copy.adminOverview, visible: true, icon: <AdminIconOverview color={section === 'overview' ? iconActive : iconColor} /> },
+    { id: 'analytics', label: copy.biTitle, visible: canAnalytics, icon: <AdminIconChart color={section === 'analytics' ? iconActive : iconColor} /> },
+    { id: 'users-create', label: copy.adminCreateUser, visible: canUsers, icon: <AdminIconUsers color={section === 'users-create' ? iconActive : iconColor} /> },
+    { id: 'users-manage', label: copy.adminManageUsers, visible: canUsers, icon: <AdminIconUsers color={section === 'users-manage' ? iconActive : iconColor} /> },
+    { id: 'clinics', label: copy.adminClinicsNav, visible: canUsers, icon: <AdminIconProviders color={section === 'clinics' ? iconActive : iconColor} /> },
+    { id: 'providers', label: copy.adminProviders, visible: true, icon: <AdminIconProviders color={section === 'providers' ? iconActive : iconColor} /> },
+    { id: 'verification', label: copy.reviews, visible: canVerify, icon: <AdminIconShield color={section === 'verification' ? iconActive : iconColor} /> },
+    { id: 'ops', label: copy.adminOps, visible: true, icon: <AdminIconOps color={section === 'ops' ? iconActive : iconColor} /> },
+    { id: 'finance', label: copy.adminFinanceReports, visible: canFinance, icon: <AdminIconFinance color={section === 'finance' ? iconActive : iconColor} /> },
+    { id: 'support', label: copy.adminSupport, visible: canSupport, icon: <AdminIconSupport color={section === 'support' ? iconActive : iconColor} /> },
+    { id: 'moderation', label: copy.reviewModeration, visible: canModerateReviews, icon: <AdminIconStar color={section === 'moderation' ? iconActive : iconColor} /> },
+    { id: 'growth', label: copy.growthAdmin, visible: canGrowth, icon: <AdminIconGrowth color={section === 'growth' ? iconActive : iconColor} /> },
+    { id: 'tenants', label: copy.tenantsAdmin, visible: canTenants, icon: <AdminIconTenants color={section === 'tenants' ? iconActive : iconColor} /> },
+    { id: 'automation', label: copy.automationTitle, visible: canAutomation, icon: <AdminIconAutomation color={section === 'automation' ? iconActive : iconColor} /> },
+    { id: 'partners', label: copy.partnersAdmin, visible: canPartners, icon: <AdminIconPartners color={section === 'partners' ? iconActive : iconColor} /> },
+    { id: 'config', label: copy.adminConfig, visible: canConfig, icon: <AdminIconConfig color={section === 'config' ? iconActive : iconColor} /> },
+    { id: 'audit', label: copy.adminAudit, visible: canAudit, icon: <AdminIconAudit color={section === 'audit' ? iconActive : iconColor} /> },
   ];
+
+  const sectionMeta: Record<Section, { title: string; subtitle: string }> = {
+    overview: { title: copy.adminOverview, subtitle: copy.adminCenterBody },
+    analytics: { title: copy.biTitle, subtitle: copy.biBody },
+    'users-create': { title: copy.adminCreateUser, subtitle: copy.adminCreateUserBody },
+    'users-manage': { title: copy.adminManageUsers, subtitle: copy.adminManageUsersBody },
+    clinics: { title: copy.adminClinicsNav, subtitle: copy.adminClinicsBody },
+    providers: { title: copy.adminProviders, subtitle: copy.adminEmptyProviders },
+    verification: { title: copy.reviews, subtitle: copy.adminPendingDoctors },
+    ops: { title: copy.adminOps, subtitle: copy.adminOpsBody },
+    finance: { title: copy.adminFinanceReports, subtitle: copy.adminActualFinanceNote },
+    support: { title: copy.adminSupport, subtitle: copy.adminEmptyTickets },
+    moderation: { title: copy.reviewModeration, subtitle: copy.reviewModeration },
+    growth: { title: copy.growthAdmin, subtitle: copy.growthAdmin },
+    tenants: { title: copy.tenantsAdmin, subtitle: copy.tenantsAdmin },
+    automation: { title: copy.automationTitle, subtitle: copy.automationTitle },
+    partners: { title: copy.partnersAdmin, subtitle: copy.partnersAdmin },
+    config: { title: copy.adminConfig, subtitle: copy.adminSettings },
+    audit: { title: copy.adminAudit, subtitle: copy.adminEmptyAudit },
+  };
 
   const dashboard = useQuery({
     queryKey: ['admin', 'dashboard', stateFilter, cityFilter],
@@ -184,8 +271,9 @@ export function AdminControlCenter() {
         state: stateFilter || undefined,
         city: cityFilter || undefined,
       }),
-    enabled: section === 'overview',
-    refetchInterval: 30_000,
+    enabled: section === 'overview' || section === 'verification',
+    refetchInterval: section === 'overview' ? 60_000 : false,
+    refetchIntervalInBackground: false,
   });
 
   const executive = useQuery({
@@ -248,20 +336,14 @@ export function AdminControlCenter() {
     enabled: section === 'partners' && canPartners,
   });
 
-  const users = useQuery({
-    queryKey: ['admin', 'users', userQuery],
-    queryFn: () => searchAdminUsers({ q: userQuery || undefined }),
-    enabled: section === 'users' && canUsers,
-  });
-
   const providers = useQuery({
     queryKey: ['admin', 'providers', section],
     queryFn: () => listAdminProviders({ kind: section === 'providers' ? 'doctor' : 'doctor' }),
     enabled: section === 'providers',
   });
 
-  const clinics = useQuery({
-    queryKey: ['admin', 'clinics'],
+  const providerClinics = useQuery({
+    queryKey: ['admin', 'provider-clinics'],
     queryFn: () => listAdminProviders({ kind: 'clinic' }),
     enabled: section === 'providers',
   });
@@ -287,7 +369,7 @@ export function AdminControlCenter() {
   const settings = useQuery({
     queryKey: ['admin', 'settings'],
     queryFn: listPlatformSettings,
-    enabled: section === 'config' && canConfig,
+    enabled: (section === 'config' && canConfig) || (section === 'growth' && canGrowth),
   });
 
   const flags = useQuery({
@@ -324,20 +406,6 @@ export function AdminControlCenter() {
     queryKey: ['admin', 'growth-coupons'],
     queryFn: listAdminCoupons,
     enabled: section === 'growth' && canGrowth,
-  });
-
-  const suspend = useMutation({
-    mutationFn: (userId: string) => suspendUser(userId, suspendReason || undefined),
-    onSuccess: async () => {
-      setConfirmUserId(null);
-      setSuspendReason('');
-      await queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
-    },
-  });
-
-  const reactivate = useMutation({
-    mutationFn: (userId: string) => reactivateUser(userId),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['admin', 'users'] }),
   });
 
   const resolveTicket = useMutation({
@@ -383,12 +451,37 @@ export function AdminControlCenter() {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: ['admin', 'growth-coupons'] }),
   });
 
+  const createCoupon = useMutation({
+    mutationFn: () => {
+      const starts = new Date();
+      const ends = new Date();
+      ends.setDate(ends.getDate() + 90);
+      return createAdminCoupon({
+        code: couponCode.trim().toUpperCase(),
+        name: couponName.trim() || couponCode.trim().toUpperCase(),
+        discountType: 'Percent',
+        discountValue: Number(couponValue) || 10,
+        startsAtUtc: starts.toISOString(),
+        endsAtUtc: ends.toISOString(),
+        firstBookingOnly: true,
+        newUserOnly: false,
+        maxRedemptionsPerUser: 1,
+      });
+    },
+    onSuccess: async () => {
+      setCouponCode('');
+      setCouponName('');
+      setCouponValue('10');
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'growth-coupons'] });
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'growth-dashboard'] });
+    },
+  });
+
   const metrics = useMemo(() => dashboard.data as AdminDashboard | undefined, [dashboard.data]);
   const error =
     dashboard.error ??
-    users.error ??
     providers.error ??
-    clinics.error ??
+    providerClinics.error ??
     finance.error ??
     tickets.error ??
     moderation.error ??
@@ -399,66 +492,34 @@ export function AdminControlCenter() {
     settings.error ??
     flags.error ??
     audit.error ??
-    suspend.error ??
-    reactivate.error ??
     resolveTicket.error ??
     saveSetting.error ??
     toggleFlag.error ??
     toggleCampaign.error ??
-    toggleCoupon.error;
+    toggleCoupon.error ??
+    createCoupon.error;
 
-  const sidebar = (
-    <View style={{ gap: spacing.sm, minWidth: wide ? 220 : undefined }}>
-      <AppText variant="title">{copy.adminCenter}</AppText>
-      <AppText variant="muted">{copy.adminCenterBody}</AppText>
-      {nav
-        .filter((item) => item.visible)
-        .map((item) => (
-          <Pressable
-            key={item.id}
-            onPress={() => {
-              if (item.id === 'verification') {
-                router.push('/reviews' as Href);
-                return;
-              }
-              if (item.id === 'ops') {
-                return;
-              }
-              setSection(item.id);
-            }}
-            style={{
-              paddingVertical: spacing.md,
-              paddingHorizontal: spacing.lg,
-              borderRadius: radius.md,
-              backgroundColor: section === item.id ? theme.colors.primary : 'transparent',
-            }}>
-            <AppText
-              variant="label"
-              style={{ color: section === item.id ? theme.colors.onPrimary : theme.colors.text }}>
-              {item.label}
-            </AppText>
-          </Pressable>
-        ))}
-      {section === 'ops' || nav.some((item) => item.id === 'ops') ? (
-        <View style={{ gap: spacing.sm, marginTop: spacing.md }}>
-          <Button label={copy.appointmentActivity} variant="secondary" onPress={() => router.push('/activity' as Href)} />
-          <Button label={copy.queueMonitor} variant="secondary" onPress={() => router.push('/queue-monitor' as Href)} />
-          <Button label={copy.financeDashboard} variant="secondary" onPress={() => router.push('/finance' as Href)} />
-        </View>
-      ) : null}
-    </View>
-  );
+  const onSelectSection = (id: string) => {
+    goToSection(id as Section);
+  };
+
+  const showBack = section !== 'overview' || sectionHistory.length > 0;
 
   const filters = (
-    <Card>
-      <AppText variant="label">{copy.adminFilters}</AppText>
-      <TextField label={copy.state} value={stateFilter} onChangeText={setStateFilter} placeholder="Maharashtra" />
-      <TextField label={copy.city} value={cityFilter} onChangeText={setCityFilter} placeholder="Mumbai" />
-    </Card>
+    <AdminPanel title={copy.adminFilters} description={copy.adminCenterBody}>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
+        <View style={{ flexGrow: 1, flexBasis: 180, minWidth: 160 }}>
+          <TextField label={copy.state} value={stateFilter} onChangeText={setStateFilter} placeholder="Maharashtra" />
+        </View>
+        <View style={{ flexGrow: 1, flexBasis: 180, minWidth: 160 }}>
+          <TextField label={copy.city} value={cityFilter} onChangeText={setCityFilter} placeholder="Mumbai" />
+        </View>
+      </View>
+    </AdminPanel>
   );
 
   const content = (
-    <View style={{ flex: 1, gap: spacing.xl }}>
+    <View style={{ flex: 1, gap: spacing.lg }}>
       {section === 'overview' ? (
         <>
           {filters}
@@ -466,25 +527,78 @@ export function AdminControlCenter() {
           {metrics ? (
             <>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
-                <MetricCard label={copy.adminPatients} value={String(metrics.totalPatients)} />
-                <MetricCard label={copy.adminVerifiedDoctors} value={String(metrics.verifiedDoctors)} />
-                <MetricCard label={copy.adminClinics} value={`${metrics.totalClinics} / ${metrics.totalBranches}`} />
-                <MetricCard label={copy.adminPendingDoctors} value={String(metrics.pendingDoctorApplications)} />
-                <MetricCard label={copy.adminPendingClinics} value={String(metrics.pendingClinicApprovals)} />
-                <MetricCard label={copy.adminAppointments} value={String(metrics.totalAppointments)} />
-                <MetricCard label={copy.adminCompleted} value={String(metrics.completedAppointments)} />
-                <MetricCard label={copy.adminCancelled} value={String(metrics.cancelledAppointments)} />
-                <MetricCard label={copy.adminActiveQueues} value={String(metrics.activeQueueEntries)} />
-                <MetricCard label={copy.grossBookings} value={`₹${metrics.grossBookingValue.toFixed(0)}`} />
-                <MetricCard label={copy.commissionEarned} value={`₹${metrics.commissionRevenue.toFixed(0)}`} />
-                <MetricCard label={copy.pendingPayables} value={`₹${metrics.pendingSettlements.toFixed(0)}`} />
-                <MetricCard label={copy.refunds} value={`₹${metrics.refunds.toFixed(0)}`} />
+                <MetricCard
+                  label={copy.adminPatients}
+                  value={String(metrics.totalPatients)}
+                  hint={copy.adminPatientGrowth}
+                  icon={<AdminIconUsers size={16} color={theme.colors.primary} />}
+                />
+                <MetricCard
+                  label={copy.adminVerifiedDoctors}
+                  value={String(metrics.verifiedDoctors)}
+                  hint={copy.adminProviderGrowth}
+                  icon={<AdminIconProviders size={16} color={theme.colors.primary} />}
+                />
+                <MetricCard
+                  label={copy.adminClinics}
+                  value={`${metrics.totalClinics}`}
+                  hint={`${metrics.totalBranches} ${copy.adminClinics}`}
+                  icon={<AdminIconTenants size={16} color={theme.colors.primary} />}
+                />
+                <MetricCard
+                  label={copy.adminAppointments}
+                  value={String(metrics.totalAppointments)}
+                  hint={`${metrics.completedAppointments} ${copy.adminCompleted}`}
+                  icon={<AdminIconOps size={16} color={theme.colors.primary} />}
+                />
+                <MetricCard
+                  label={copy.adminCompleted}
+                  value={String(metrics.completedAppointments)}
+                  hint={`${metrics.cancelledAppointments} ${copy.adminCancelled}`}
+                  icon={<AdminIconChart size={16} color={theme.colors.primary} />}
+                />
+                <MetricCard
+                  label={copy.adminPendingDoctors}
+                  value={String(metrics.pendingDoctorApplications)}
+                  hint={`${metrics.pendingClinicApprovals} ${copy.adminPendingClinics}`}
+                  icon={<AdminIconShield size={16} color={theme.colors.primary} />}
+                />
+                <MetricCard
+                  label={copy.commissionEarned}
+                  value={`₹${metrics.commissionRevenue.toFixed(0)}`}
+                  hint={copy.adminActualFinanceNote}
+                  icon={<AdminIconFinance size={16} color={theme.colors.primary} />}
+                />
+                <MetricCard
+                  label={copy.grossBookings}
+                  value={`₹${metrics.grossBookingValue.toFixed(0)}`}
+                  hint={`${copy.refunds}: ₹${metrics.refunds.toFixed(0)}`}
+                  icon={<AdminIconGrowth size={16} color={theme.colors.primary} />}
+                />
               </View>
-              <AppText variant="muted">{copy.adminActualFinanceNote}</AppText>
-              <BarChart title={copy.adminMonthlyAppointments} rows={metrics.monthlyAppointments} kind="count" />
-              <BarChart title={copy.adminMonthlyRevenue} rows={metrics.monthlyRevenue} kind="amount" />
-              <BarChart title={copy.adminPatientGrowth} rows={metrics.patientGrowth} kind="count" />
-              <BarChart title={copy.adminProviderGrowth} rows={metrics.providerGrowth} kind="count" />
+
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
+                <BarChart title={copy.adminMonthlyAppointments} rows={metrics.monthlyAppointments} kind="count" />
+                <BarChart title={copy.adminMonthlyRevenue} rows={metrics.monthlyRevenue} kind="amount" />
+                <BarChart title={copy.adminPatientGrowth} rows={metrics.patientGrowth} kind="count" />
+                <BarChart title={copy.adminProviderGrowth} rows={metrics.providerGrowth} kind="count" />
+              </View>
+
+              <AdminPanel title={copy.adminPendingDoctors} description={copy.reviews}>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+                  <StatusBadge label={`${metrics.pendingDoctorApplications} doctors`} tone="warning" />
+                  <StatusBadge label={`${metrics.pendingClinicApprovals} clinics`} tone="warning" />
+                  <StatusBadge label={`${metrics.activeQueueEntries} ${copy.adminActiveQueues}`} tone="primary" />
+                  <StatusBadge label={`₹${metrics.pendingSettlements.toFixed(0)} ${copy.pendingPayables}`} tone="neutral" />
+                </View>
+                {canVerify ? (
+                  <Button
+                    label={copy.reviews}
+                    variant="secondary"
+                    onPress={() => router.push('/reviews' as Href)}
+                  />
+                ) : null}
+              </AdminPanel>
             </>
           ) : null}
         </>
@@ -653,90 +767,124 @@ export function AdminControlCenter() {
         )
       ) : null}
 
-      {section === 'users' && canUsers ? (
-        <Card>
-          <TextField label={copy.search} value={userQuery} onChangeText={setUserQuery} placeholder={copy.phonePlaceholder} />
-          {(users.data ?? []).map((user) => (
-            <Card key={user.userId}>
-              <AppText>
-                {user.fullName || copy.welcome} · {user.phoneNumber}
-              </AppText>
-              <AppText variant="muted">{user.roles.join(', ') || '—'}</AppText>
-              {user.suspendedAtUtc ? <AppText style={{ color: theme.colors.error }}>{copy.adminSuspended}</AppText> : null}
-              {confirmUserId === user.userId ? (
-                <>
-                  <TextField label={copy.reason} value={suspendReason} onChangeText={setSuspendReason} />
-                  <Button
-                    label={copy.adminConfirmSuspend}
-                    variant="danger"
-                    loading={suspend.isPending}
-                    onPress={() => suspend.mutate(user.userId)}
-                  />
-                  <Button label={copy.cancel} variant="secondary" onPress={() => setConfirmUserId(null)} />
-                </>
-              ) : user.suspendedAtUtc ? (
-                <Button label={copy.adminReactivate} loading={reactivate.isPending} onPress={() => reactivate.mutate(user.userId)} />
-              ) : (
-                <Button label={copy.adminSuspend} variant="danger" onPress={() => setConfirmUserId(user.userId)} />
-              )}
-            </Card>
-          ))}
-          {users.data?.length === 0 ? <AppText variant="muted">{copy.adminEmptyUsers}</AppText> : null}
-        </Card>
+      {section === 'users-create' && canUsers ? (
+        <AdminCreateUserPanel onActivated={() => goToSection('users-manage')} />
       ) : null}
+      {section === 'users-manage' && canUsers ? <AdminManageUsersPanel /> : null}
+      {section === 'clinics' && canUsers ? <AdminClinicsPanel /> : null}
 
       {section === 'providers' ? (
         <>
-          <Card>
-            <AppText variant="label">{copy.doctor}</AppText>
+          <AdminPanel title={copy.doctor}>
             {(providers.data ?? []).map((item) => (
-              <AppText key={item.id}>
-                {item.name} · {item.status}
-              </AppText>
+              <View
+                key={item.id}
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: spacing.sm,
+                  paddingVertical: 8,
+                  borderBottomWidth: 1,
+                  borderBottomColor: theme.colors.border,
+                }}>
+                <View style={{ flex: 1, gap: 2 }}>
+                  <AppText>{item.name}</AppText>
+                  <AppText variant="muted">
+                    {item.city ? `${item.city}${item.state ? `, ${item.state}` : ''}` : item.state || '—'}
+                  </AppText>
+                </View>
+                <StatusBadge
+                  label={item.status}
+                  tone={item.status === 'Approved' ? 'success' : item.status === 'Rejected' ? 'error' : 'warning'}
+                />
+              </View>
             ))}
             {providers.data?.length === 0 ? <AppText variant="muted">{copy.adminEmptyProviders}</AppText> : null}
-          </Card>
-          <Card>
-            <AppText variant="label">{copy.clinic}</AppText>
-            {(clinics.data ?? []).map((item) => (
-              <AppText key={item.id}>
-                {item.name} · {item.status}
-                {item.city ? ` · ${item.city}` : ''}
-              </AppText>
+          </AdminPanel>
+          <AdminPanel title={copy.clinic}>
+            {(providerClinics.data ?? []).map((item) => (
+              <View
+                key={item.id}
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: spacing.sm,
+                  paddingVertical: 8,
+                  borderBottomWidth: 1,
+                  borderBottomColor: theme.colors.border,
+                }}>
+                <View style={{ flex: 1, gap: 2 }}>
+                  <AppText>{item.name}</AppText>
+                  <AppText variant="muted">{item.city ? `${item.city}` : '—'}</AppText>
+                </View>
+                <StatusBadge label={item.status} tone="primary" />
+              </View>
             ))}
-          </Card>
+          </AdminPanel>
         </>
       ) : null}
 
+      {section === 'verification' && canVerify ? (
+        <AdminPanel title={copy.reviews} description={copy.adminPendingDoctors}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+            <StatusBadge
+              label={`${metrics?.pendingDoctorApplications ?? '—'} ${copy.adminPendingDoctors}`}
+              tone="warning"
+            />
+            <StatusBadge
+              label={`${metrics?.pendingClinicApprovals ?? '—'} ${copy.adminPendingClinics}`}
+              tone="warning"
+            />
+          </View>
+          <Button label={copy.reviews} onPress={() => router.push('/reviews' as Href)} />
+        </AdminPanel>
+      ) : null}
+
       {section === 'ops' ? (
-        <Card>
-          <AppText variant="muted">{copy.adminOpsBody}</AppText>
-          <Button label={copy.appointmentActivity} onPress={() => router.push('/activity' as Href)} />
-          <Button label={copy.queueMonitor} variant="secondary" onPress={() => router.push('/queue-monitor' as Href)} />
-        </Card>
+        <AdminPanel title={copy.adminOps} description={copy.adminOpsBody}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+            <Button label={copy.appointmentActivity} onPress={() => router.push('/activity' as Href)} />
+            <Button label={copy.queueMonitor} variant="secondary" onPress={() => router.push('/queue-monitor' as Href)} />
+            <Button label={copy.financeDashboard} variant="secondary" onPress={() => router.push('/finance' as Href)} />
+          </View>
+        </AdminPanel>
       ) : null}
 
       {section === 'finance' && canFinance ? (
         <>
           {filters}
-          <Button
-            label={copy.adminExportCsv}
-            variant="secondary"
-            onPress={() => {
-              void Linking.openURL(financeCsvUrl({ state: stateFilter || undefined, city: cityFilter || undefined }));
-            }}
-          />
-          <Card>
-            <AppText variant="muted">{copy.adminActualFinanceNote}</AppText>
+          <AdminPanel
+            title={copy.adminFinanceReports}
+            description={copy.adminActualFinanceNote}
+            action={
+              <Button
+                label={copy.adminExportCsv}
+                variant="secondary"
+                onPress={() => {
+                  void Linking.openURL(financeCsvUrl({ state: stateFilter || undefined, city: cityFilter || undefined }));
+                }}
+              />
+            }>
             {(finance.data ?? []).slice(0, 40).map((row) => (
-              <AppText key={row.appointmentId}>
-                {row.clinicName || row.clinicId} · ₹{row.consultationFee.toFixed(0)} · commission ₹
-                {row.commissionAmount.toFixed(0)}
-                {row.city ? ` · ${row.city}` : ''}
-              </AppText>
+              <View
+                key={row.appointmentId}
+                style={{
+                  paddingVertical: 10,
+                  borderBottomWidth: 1,
+                  borderBottomColor: theme.colors.border,
+                  gap: 2,
+                }}>
+                <AppText>{row.clinicName || row.clinicId}</AppText>
+                <AppText variant="muted">
+                  ₹{row.consultationFee.toFixed(0)} · commission ₹{row.commissionAmount.toFixed(0)}
+                  {row.city ? ` · ${row.city}` : ''}
+                </AppText>
+              </View>
             ))}
             {finance.data?.length === 0 ? <AppText variant="muted">{copy.adminEmptyFinance}</AppText> : null}
-          </Card>
+          </AdminPanel>
         </>
       ) : null}
 
@@ -1015,6 +1163,44 @@ export function AdminControlCenter() {
             />
           </View>
           <Card>
+            <AppText variant="label">Referral reward rules</AppText>
+            <AppText variant="muted">
+              Qualifying event: first paid non-walk-in booking by the referred patient. Registration alone does not credit
+              rewards.
+            </AppText>
+            {!canConfig ? (
+              <AppText variant="muted">Platform config permission is required to edit reward rules.</AppText>
+            ) : (
+              <>
+                {(settings.data ?? [])
+                  .filter((setting) => setting.key.startsWith('growth.'))
+                  .map((setting) => {
+                    const value = settingDrafts[setting.key] ?? setting.value;
+                    return (
+                      <View key={setting.id} style={{ gap: spacing.sm }}>
+                        <TextField
+                          label={setting.key}
+                          value={value}
+                          onChangeText={(next) => setSettingDrafts((prev) => ({ ...prev, [setting.key]: next }))}
+                          keyboardType="number-pad"
+                        />
+                        {setting.description ? <AppText variant="muted">{setting.description}</AppText> : null}
+                        <Button
+                          label={copy.save}
+                          variant="secondary"
+                          loading={saveSetting.isPending}
+                          onPress={() => saveSetting.mutate({ key: setting.key, value })}
+                        />
+                      </View>
+                    );
+                  })}
+                {(settings.data ?? []).every((setting) => !setting.key.startsWith('growth.')) && !settings.isLoading ? (
+                  <AppText variant="muted">Growth settings will appear after platform seed runs.</AppText>
+                ) : null}
+              </>
+            )}
+          </Card>
+          <Card>
             <AppText variant="label">{copy.growthCampaigns}</AppText>
             {(growthCampaigns.data ?? []).map((campaign) => (
               <View key={campaign.id} style={{ gap: spacing.sm }}>
@@ -1033,6 +1219,18 @@ export function AdminControlCenter() {
           </Card>
           <Card>
             <AppText variant="label">{copy.growthTopCoupons}</AppText>
+            <AppText variant="muted">
+              Referrals invited {growth.data?.referralRegistrations ?? 0} · rewarded {growth.data?.referralRewardsPaid ?? 0}
+            </AppText>
+            <TextField label="New coupon code" value={couponCode} onChangeText={setCouponCode} autoCapitalize="characters" />
+            <TextField label="Coupon name" value={couponName} onChangeText={setCouponName} />
+            <TextField label="Percent off" value={couponValue} onChangeText={setCouponValue} keyboardType="number-pad" />
+            <Button
+              label="Create coupon"
+              loading={createCoupon.isPending}
+              onPress={() => createCoupon.mutate()}
+              disabled={!couponCode.trim()}
+            />
             {(growth.data?.topCoupons ?? []).map((row) => (
               <AppText key={row.code} variant="muted">
                 {row.code} · {row.redemptions} · ₹{row.discountTotal.toFixed(0)}
@@ -1056,29 +1254,45 @@ export function AdminControlCenter() {
       ) : null}
 
       {section === 'audit' && canAudit ? (
-        <Card>
+        <AdminPanel title={copy.adminAudit}>
           {(audit.data ?? []).map((entry) => (
-            <AppText key={entry.id} variant="muted">
-              {entry.occurredAtUtc} · {entry.action}
-            </AppText>
+            <View
+              key={entry.id}
+              style={{
+                paddingVertical: 10,
+                borderBottomWidth: 1,
+                borderBottomColor: theme.colors.border,
+                gap: 2,
+              }}>
+              <AppText variant="label">{entry.action}</AppText>
+              <AppText variant="muted">{new Date(entry.occurredAtUtc).toLocaleString()}</AppText>
+            </View>
           ))}
           {audit.data?.length === 0 ? <AppText variant="muted">{copy.adminEmptyAudit}</AppText> : null}
-        </Card>
+        </AdminPanel>
       ) : null}
 
-      {error ? <AppText variant="muted">{problemMessage(error, copy.adminCenter)}</AppText> : null}
+      {error ? (
+        <AdminPanel title={copy.adminCenter}>
+          <AppText variant="muted" style={{ color: theme.colors.error }}>
+            {problemMessage(error, copy.adminCenter)}
+          </AppText>
+        </AdminPanel>
+      ) : null}
     </View>
   );
 
   return (
-    <Screen>
-      <ScrollView contentContainerStyle={{ flexGrow: 1, padding: spacing.xl, gap: spacing.xl }}>
-        <Button label={copy.back} variant="secondary" onPress={() => router.back()} />
-        <View style={{ flexDirection: wide ? 'row' : 'column', gap: spacing.xl, alignItems: 'flex-start' }}>
-          {sidebar}
-          <View style={{ flex: 1, width: '100%' }}>{content}</View>
-        </View>
-      </ScrollView>
-    </Screen>
+    <AdminShell
+      title={sectionMeta[section].title}
+      subtitle={sectionMeta[section].subtitle}
+      activeId={section}
+      items={nav}
+      onSelect={onSelectSection}
+      showBack={showBack}
+      onBack={handleAdminBack}
+      onLogout={() => signOut.mutate()}>
+      {content}
+    </AdminShell>
   );
 }

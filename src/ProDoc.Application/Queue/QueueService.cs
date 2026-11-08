@@ -79,7 +79,14 @@ public sealed class QueueService(
     {
         await access.EnsureQueueAccessAsync(userId, clinicId, branchId, cancellationToken);
         var rows = await queue.ListClinicDoctorsAsync(clinicId, branchId, cancellationToken);
-        return rows.Select(row => new DeskDoctor(row.DoctorId, row.DisplayName)).ToArray();
+        var assigned = await queue.ListReceptionistAssignedDoctorIdsAsync(userId, clinicId, cancellationToken);
+        if (assigned.Count > 0)
+        {
+            var allowed = assigned.ToHashSet();
+            rows = rows.Where(row => allowed.Contains(row.DoctorId)).ToArray();
+        }
+
+        return rows.Select(row => new DeskDoctor(row.DoctorId, row.DisplayName, row.YearsOfExperience)).ToArray();
     }
 
     public async Task<QueueSettingsDetails> GetSettingsAsync(Guid userId, Guid clinicId, Guid branchId, CancellationToken cancellationToken)
@@ -146,15 +153,31 @@ public sealed class QueueService(
         var hashed = InfrastructureHash(rawToken.Trim());
         var token = await queue.FindCheckInTokenByHashAsync(hashed, tracking: true, cancellationToken)
             ?? throw DomainException.NotFound("check_in_token_invalid", "That check-in code was not found.");
+        var now = clock.UtcNow;
+        if (token.RevokedAtUtc is not null)
+        {
+            throw DomainException.Conflict("check_in_token_invalid", "That check-in code is no longer valid.");
+        }
+
+        if (token.UsedAtUtc is not null)
+        {
+            throw DomainException.Conflict("already_checked_in", "This appointment is already checked in.");
+        }
+
+        if (token.ExpiresAtUtc <= now)
+        {
+            throw DomainException.Conflict("check_in_token_expired", "That check-in code has expired. Ask the patient to refresh the QR.");
+        }
+
         var appointment = await queue.FindAppointmentAsync(token.AppointmentId, tracking: true, cancellationToken)
             ?? throw DomainException.NotFound("appointment_not_found", "That appointment was not found.");
-        await access.EnsureQueueAccessAsync(userId, appointment.ClinicId, appointment.BranchId, cancellationToken);
+        await access.EnsureDoctorCoverageAsync(userId, appointment.ClinicId, appointment.BranchId, appointment.DoctorId, cancellationToken);
         if (token.BranchId != appointment.BranchId)
         {
             throw DomainException.Conflict("check_in_token_invalid", "That check-in code was not found.");
         }
 
-        token.MarkUsed(clock.UtcNow);
+        token.MarkUsed(now);
         return await CheckInAppointmentCoreAsync(userId, appointment, CheckInMethod.Qr, metadata, cancellationToken);
     }
 
@@ -166,7 +189,7 @@ public sealed class QueueService(
     {
         var appointment = await queue.FindAppointmentAsync(appointmentId, tracking: true, cancellationToken)
             ?? throw DomainException.NotFound("appointment_not_found", "That appointment was not found.");
-        await access.EnsureQueueAccessAsync(userId, appointment.ClinicId, appointment.BranchId, cancellationToken);
+        await access.EnsureDoctorCoverageAsync(userId, appointment.ClinicId, appointment.BranchId, appointment.DoctorId, cancellationToken);
         return await CheckInAppointmentCoreAsync(userId, appointment, CheckInMethod.Reception, metadata, cancellationToken);
     }
 
@@ -182,10 +205,17 @@ public sealed class QueueService(
         CancellationToken cancellationToken)
     {
         await access.EnsureQueueAccessAsync(userId, clinicId, branchId, cancellationToken);
+        var assigned = await access.ListAssignedDoctorIdsAsync(userId, clinicId, cancellationToken);
+        var allowed = assigned.Count > 0 ? assigned.ToHashSet() : null;
         var rows = await queue.SearchAppointmentsAsync(clinicId, branchId, reference, patientName, phone, doctorId, date, cancellationToken);
         var mapped = new List<AppointmentSearchItem>();
         foreach (var row in rows)
         {
+            if (allowed is not null && !allowed.Contains(row.DoctorId))
+            {
+                continue;
+            }
+
             var doctor = await providers.FindDoctorAsync(row.DoctorId, tracking: false, cancellationToken);
             mapped.Add(new AppointmentSearchItem(
                 row.Id,
@@ -195,7 +225,8 @@ public sealed class QueueService(
                 row.DoctorId,
                 doctor?.DisplayName ?? "Doctor",
                 row.StartsAtUtc,
-                row.IsWalkIn));
+                row.IsWalkIn,
+                row.TokenLabel));
         }
 
         return mapped;
@@ -213,7 +244,7 @@ public sealed class QueueService(
         RequestMetadata metadata,
         CancellationToken cancellationToken)
     {
-        await access.EnsureQueueAccessAsync(userId, clinicId, branchId, cancellationToken);
+        await access.EnsureDoctorCoverageAsync(userId, clinicId, branchId, doctorId, cancellationToken);
         var settings = await EnsureSettingsAsync(clinicId, branchId, cancellationToken);
         if (!settings.AllowWalkIns)
         {
@@ -276,6 +307,8 @@ public sealed class QueueService(
         CancellationToken cancellationToken)
     {
         var rows = await ListDoctorQueueAsync(userId, clinicId, branchId, doctorId, null, cancellationToken);
+        static bool IsPaid(string? status) =>
+            string.Equals(status, "Paid", StringComparison.OrdinalIgnoreCase);
         return new QueueSummary(
             rows.Count,
             rows.Count(item => item.Status == nameof(QueueEntryStatus.Waiting)),
@@ -284,7 +317,10 @@ public sealed class QueueService(
             rows.Count(item => item.Status == nameof(QueueEntryStatus.Completed)),
             rows.Count(item => item.IsWalkIn),
             rows.FirstOrDefault(item => item.Status == nameof(QueueEntryStatus.InConsultation) || item.Status == nameof(QueueEntryStatus.Called)),
-            rows.FirstOrDefault(item => item.Status == nameof(QueueEntryStatus.Waiting)));
+            rows.FirstOrDefault(item => item.Status == nameof(QueueEntryStatus.Waiting)),
+            rows.Count(item => item.Status == nameof(QueueEntryStatus.Skipped)),
+            rows.Count(item => IsPaid(item.PaymentStatus)),
+            rows.Count(item => !IsPaid(item.PaymentStatus)));
     }
 
     public async Task<IReadOnlyList<QueueEntryDetails>> ListBranchQueueAsync(
@@ -487,7 +523,25 @@ public sealed class QueueService(
         var isLate = now > appointment.StartsAtUtc;
         appointment.MarkCheckedIn(now);
         var session = await EnsureSessionAsync(appointment.ClinicId, appointment.BranchId, appointment.DoctorId, operatingDate, now, cancellationToken);
-        var (label, number) = await IssueTokenAsync(appointment.ClinicId, appointment.BranchId, appointment.DoctorId, operatingDate, settings.TokenPrefix, cancellationToken);
+        string label;
+        int number;
+        if (!string.IsNullOrWhiteSpace(appointment.TokenLabel) && appointment.TokenNumber is int existingNumber)
+        {
+            label = appointment.TokenLabel;
+            number = existingNumber;
+        }
+        else
+        {
+            (label, number) = await IssueTokenAsync(
+                appointment.ClinicId,
+                appointment.BranchId,
+                appointment.DoctorId,
+                operatingDate,
+                settings.TokenPrefix,
+                cancellationToken);
+            appointment.AssignVisitToken(label, number, now);
+        }
+
         var position = await NextPositionAsync(appointment.DoctorId, appointment.BranchId, operatingDate, cancellationToken);
         var entry = QueueEntry.CheckInAppointment(
             session,
@@ -506,23 +560,40 @@ public sealed class QueueService(
         await queue.AddAuditAsync(AuditLog.Record(userId, AuditActions.AppointmentCheckedIn, now, metadata.IpAddress, metadata.UserAgent), cancellationToken);
         await queue.SaveChangesAsync(cancellationToken);
         await ReorderAsync(appointment.DoctorId, appointment.BranchId, operatingDate, settings, cancellationToken);
-        await NotifyPatientAsync(appointment.AccountUserId, "check_in", entry.Id, "Checked in", $"Your token is {entry.TokenLabel}. Please wait for your turn.", cancellationToken);
         await PublishQueueAsync(entry, "PatientCheckedIn", cancellationToken);
         try
         {
+            var clinic = await providers.FindClinicAsync(appointment.ClinicId, tracking: false, cancellationToken);
+            var doctor = await providers.FindDoctorAsync(appointment.DoctorId, tracking: false, cancellationToken);
+            var doctorName = !string.IsNullOrWhiteSpace(doctor?.DisplayName)
+                ? doctor!.DisplayName!
+                : "Doctor";
             await automation.PublishAsync(
                 AutomationTriggerTypes.PatientCheckedIn,
                 new
                 {
                     queueEntryId = entry.Id,
                     appointmentId = appointment.Id,
+                    accountUserId = appointment.AccountUserId,
                     userId = appointment.AccountUserId,
+                    patientName = appointment.PatientName,
+                    doctorName,
+                    clinicName = clinic?.Name ?? "Clinic",
+                    reference = appointment.Reference,
                     tokenLabel = entry.TokenLabel,
-                    position = entry.QueuePosition
+                    position = entry.QueuePosition,
+                    status = appointment.Status.ToString(),
+                    startsAtUtc = appointment.StartsAtUtc,
+                    endsAtUtc = appointment.EndsAtUtc,
+                    timeZoneId = appointment.TimeZoneId,
+                    bookingMode = appointment.BookingMode.ToString(),
+                    clinicId = appointment.ClinicId,
+                    branchId = appointment.BranchId,
+                    doctorId = appointment.DoctorId
                 },
                 $"queue.checkin:{entry.Id:N}",
                 cancellationToken,
-                subjectId: entry.Id,
+                subjectId: appointment.Id,
                 userId: appointment.AccountUserId);
         }
         catch (Exception ex)
@@ -640,7 +711,7 @@ public sealed class QueueService(
 
                 var number = counter.Next();
                 await queue.SaveTokenIssueAsync(cancellationToken);
-                return ($"{prefix}{number:D3}", number);
+                return ($"{prefix}{number}", number);
             }
             catch (DomainException exception) when (exception.Code == "queue_conflict" && attempt == 0)
             {
@@ -804,7 +875,9 @@ public sealed class QueueService(
                 ahead,
                 estimate,
                 StatusMessage(row.Status, ahead ?? 0),
-                row.UpdatedAtUtc));
+                row.UpdatedAtUtc,
+                appointment?.PaymentStatus,
+                appointment?.PaymentMethod));
         }
 
         return mapped;

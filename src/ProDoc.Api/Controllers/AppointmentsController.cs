@@ -2,8 +2,10 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ProDoc.Api.Auth;
 using ProDoc.Api.Contracts;
+using ProDoc.Api.Errors;
 using ProDoc.Application.Appointments;
 using ProDoc.Application.Providers;
+using ProDoc.Domain.Common;
 using ProDoc.Domain.Identity;
 
 namespace ProDoc.Api.Controllers;
@@ -11,24 +13,52 @@ namespace ProDoc.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/v1/appointments")]
-public sealed class AppointmentsController(BookingService booking) : ControllerBase
+public sealed class AppointmentsController(BookingService booking, AppointmentShareService shares) : ControllerBase
 {
     [HasPermission(PermissionCodes.AppointmentsBookSelf)]
     [HttpPost("holds")]
-    public Task<AppointmentDetails> Hold(HoldAppointmentRequest request, CancellationToken cancellationToken) =>
-        booking.HoldAsync(User.GetUserId(), request.ScheduleId, request.Date, TimeOnly.Parse(request.Start), Metadata(), cancellationToken);
+    public async Task<ActionResult<AppointmentDetails>> Hold(HoldAppointmentRequest request, CancellationToken cancellationToken)
+    {
+        if (!TryParseTime(request.Start, out var start, out var error))
+        {
+            return DomainProblemResults.FromAppError(error!);
+        }
+
+        var result = await booking.HoldAsync(
+            User.GetUserId(),
+            request.ScheduleId,
+            request.Date,
+            start,
+            Metadata(),
+            cancellationToken);
+        return result.ToActionResult(this);
+    }
 
     [HasPermission(PermissionCodes.AppointmentsBookSelf)]
     [HttpPost("{appointmentId:guid}/confirm")]
-    public Task<AppointmentDetails> Confirm(Guid appointmentId, ConfirmAppointmentRequest request, CancellationToken cancellationToken) =>
-        booking.ConfirmAsync(User.GetUserId(), appointmentId, request.FamilyMemberId, request.Reason, request.Notes, Metadata(), cancellationToken);
+    public async Task<ActionResult<AppointmentDetails>> Confirm(
+        Guid appointmentId,
+        ConfirmAppointmentRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await booking.ConfirmAsync(
+            User.GetUserId(),
+            appointmentId,
+            request.FamilyMemberId,
+            request.Reason,
+            request.Notes,
+            Metadata(),
+            cancellationToken,
+            request.FollowUpId);
+        return result.ToActionResult(this);
+    }
 
     [HasPermission(PermissionCodes.AppointmentsBookSelf)]
     [HttpPost("{appointmentId:guid}/release")]
     public async Task<IActionResult> Release(Guid appointmentId, CancellationToken cancellationToken)
     {
-        await booking.ReleaseAsync(User.GetUserId(), appointmentId, cancellationToken);
-        return NoContent();
+        var result = await booking.ReleaseAsync(User.GetUserId(), appointmentId, cancellationToken);
+        return result.ToActionResult(this);
     }
 
     [HasPermission(PermissionCodes.AppointmentsBookSelf)]
@@ -38,28 +68,72 @@ public sealed class AppointmentsController(BookingService booking) : ControllerB
 
     [HasPermission(PermissionCodes.AppointmentsBookSelf)]
     [HttpGet("{appointmentId:guid}")]
-    public Task<AppointmentDetails> Get(Guid appointmentId, CancellationToken cancellationToken) =>
-        booking.GetAsync(User.GetUserId(), appointmentId, practice: false, cancellationToken);
+    public async Task<ActionResult<AppointmentDetails>> Get(Guid appointmentId, CancellationToken cancellationToken)
+    {
+        var result = await booking.GetAsync(User.GetUserId(), appointmentId, practice: false, cancellationToken);
+        return result.ToActionResult(this);
+    }
 
     [HasPermission(PermissionCodes.AppointmentsBookSelf)]
     [HttpPost("{appointmentId:guid}/cancellation")]
-    public Task<AppointmentDetails> Cancel(Guid appointmentId, AppointmentNoteRequest request, CancellationToken cancellationToken) =>
-        booking.CancelAsync(User.GetUserId(), appointmentId, request.Reason, practice: false, Metadata(), cancellationToken);
+    public async Task<ActionResult<AppointmentDetails>> Cancel(
+        Guid appointmentId,
+        AppointmentNoteRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await booking.CancelAsync(
+            User.GetUserId(),
+            appointmentId,
+            request.Reason,
+            practice: false,
+            Metadata(),
+            cancellationToken);
+        return result.ToActionResult(this);
+    }
 
     [HasPermission(PermissionCodes.AppointmentsBookSelf)]
     [HttpPost("{appointmentId:guid}/reschedule")]
-    public Task<AppointmentDetails> Reschedule(Guid appointmentId, RescheduleAppointmentRequest request, CancellationToken cancellationToken) =>
-        booking.RescheduleAsync(User.GetUserId(), appointmentId, request.Date, TimeOnly.Parse(request.Start), practice: false, Metadata(), cancellationToken);
+    public async Task<ActionResult<AppointmentDetails>> Reschedule(
+        Guid appointmentId,
+        RescheduleAppointmentRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryParseTime(request.Start, out var start, out var error))
+        {
+            return DomainProblemResults.FromAppError(error!);
+        }
+
+        var result = await booking.RescheduleAsync(
+            User.GetUserId(),
+            appointmentId,
+            request.Date,
+            start,
+            practice: false,
+            Metadata(),
+            cancellationToken,
+            request.Reason);
+        return result.ToActionResult(this);
+    }
 
     [HttpGet("practice")]
-    public async Task<ActionResult<IReadOnlyList<AppointmentDetails>>> Practice([FromQuery] DateOnly from, [FromQuery] DateOnly to, CancellationToken cancellationToken)
+    public async Task<ActionResult<IReadOnlyList<AppointmentDetails>>> Practice(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] Guid? clinicId,
+        [FromQuery] bool assignedOnly,
+        CancellationToken cancellationToken)
     {
         if (!CanPractice())
         {
             return Forbid();
         }
 
-        return Ok(await booking.ListPracticeAsync(User.GetUserId(), from, to, cancellationToken));
+        if (DateValidation.ValidateInclusiveRange(from, to) is { } rangeError)
+        {
+            return DomainProblemResults.FromAppError(rangeError);
+        }
+
+        return Ok(await booking.ListPracticeAsync(User.GetUserId(), from, to, cancellationToken, clinicId, assignedOnly));
     }
 
     [HttpGet("{appointmentId:guid}/practice")]
@@ -70,46 +144,121 @@ public sealed class AppointmentsController(BookingService booking) : ControllerB
             return Forbid();
         }
 
-        return Ok(await booking.GetAsync(User.GetUserId(), appointmentId, practice: true, cancellationToken));
+        var result = await booking.GetAsync(User.GetUserId(), appointmentId, practice: true, cancellationToken);
+        return result.ToActionResult(this);
     }
 
     [HttpPost("{appointmentId:guid}/practice-cancellation")]
-    public async Task<ActionResult<AppointmentDetails>> PracticeCancel(Guid appointmentId, AppointmentNoteRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<AppointmentDetails>> PracticeCancel(
+        Guid appointmentId,
+        AppointmentNoteRequest request,
+        CancellationToken cancellationToken)
     {
         if (!CanPractice())
         {
             return Forbid();
         }
 
-        return Ok(await booking.CancelAsync(User.GetUserId(), appointmentId, request.Reason, practice: true, Metadata(), cancellationToken));
+        var result = await booking.CancelAsync(
+            User.GetUserId(),
+            appointmentId,
+            request.Reason,
+            practice: true,
+            Metadata(),
+            cancellationToken);
+        return result.ToActionResult(this);
     }
 
     [HttpPost("{appointmentId:guid}/practice-reschedule")]
-    public async Task<ActionResult<AppointmentDetails>> PracticeReschedule(Guid appointmentId, RescheduleAppointmentRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<AppointmentDetails>> PracticeReschedule(
+        Guid appointmentId,
+        RescheduleAppointmentRequest request,
+        CancellationToken cancellationToken)
     {
         if (!CanPractice())
         {
             return Forbid();
         }
 
-        return Ok(await booking.RescheduleAsync(User.GetUserId(), appointmentId, request.Date, TimeOnly.Parse(request.Start), practice: true, Metadata(), cancellationToken));
+        if (!TryParseTime(request.Start, out var start, out var error))
+        {
+            return DomainProblemResults.FromAppError(error!);
+        }
+
+        var result = await booking.RescheduleAsync(
+            User.GetUserId(),
+            appointmentId,
+            request.Date,
+            start,
+            practice: true,
+            Metadata(),
+            cancellationToken,
+            request.Reason);
+        return result.ToActionResult(this);
     }
 
     [HttpPost("{appointmentId:guid}/decision")]
-    public async Task<ActionResult<AppointmentDetails>> Decide(Guid appointmentId, AppointmentDecisionRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<AppointmentDetails>> Decide(
+        Guid appointmentId,
+        AppointmentDecisionRequest request,
+        CancellationToken cancellationToken)
     {
         if (!CanPractice())
         {
             return Forbid();
         }
 
-        return Ok(await booking.DecideAsync(User.GetUserId(), appointmentId, request.Decision == "Approve", request.Reason, Metadata(), cancellationToken));
+        return Ok(await booking.DecideAsync(
+            User.GetUserId(),
+            appointmentId,
+            request.Decision == "Approve",
+            request.Reason,
+            Metadata(),
+            cancellationToken));
     }
 
     [HasPermission(PermissionCodes.AppointmentsBookWalkIn)]
     [HttpPost("walk-ins")]
-    public Task<AppointmentDetails> WalkIn(WalkInAppointmentRequest request, CancellationToken cancellationToken) =>
-        booking.WalkInAsync(User.GetUserId(), request.ScheduleId, request.Date, TimeOnly.Parse(request.Start), request.PatientName, Metadata(), cancellationToken);
+    public async Task<ActionResult<AppointmentDetails>> WalkIn(WalkInAppointmentRequest request, CancellationToken cancellationToken)
+    {
+        if (!TryParseTime(request.Start, out var start, out var error))
+        {
+            return DomainProblemResults.FromAppError(error!);
+        }
+
+        return Ok(await booking.WalkInAsync(
+            User.GetUserId(),
+            request.ScheduleId,
+            request.Date,
+            start,
+            request.PatientName,
+            Metadata(),
+            cancellationToken));
+    }
+
+    [HasPermission(PermissionCodes.AppointmentsManageClinic)]
+    [HttpPost("desk-bookings")]
+    public async Task<ActionResult<AppointmentDetails>> DeskBook(
+        DeskBookAppointmentRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryParseTime(request.Start, out var start, out var error))
+        {
+            return DomainProblemResults.FromAppError(error!);
+        }
+
+        return Ok(await booking.BookForPatientAsync(
+            User.GetUserId(),
+            request.ScheduleId,
+            request.Date,
+            start,
+            request.PatientName,
+            request.Phone,
+            request.Reason,
+            request.Notes,
+            Metadata(),
+            cancellationToken));
+    }
 
     [HasPermission(PermissionCodes.AppointmentsBookSelf)]
     [HttpGet("/api/v1/family-members")]
@@ -119,7 +268,13 @@ public sealed class AppointmentsController(BookingService booking) : ControllerB
     [HasPermission(PermissionCodes.AppointmentsBookSelf)]
     [HttpPost("/api/v1/family-members")]
     public Task<FamilyMemberDetails> AddFamily(FamilyMemberRequest request, CancellationToken cancellationToken) =>
-        booking.AddFamilyAsync(User.GetUserId(), request.FullName, request.DateOfBirth, request.Gender, request.Relationship, cancellationToken);
+        booking.AddFamilyAsync(
+            User.GetUserId(),
+            request.FullName,
+            request.DateOfBirth,
+            request.Gender,
+            request.Relationship,
+            cancellationToken);
 
     [HasPermission(PermissionCodes.AppointmentsBookSelf)]
     [HttpDelete("/api/v1/family-members/{memberId:guid}")]
@@ -129,8 +284,63 @@ public sealed class AppointmentsController(BookingService booking) : ControllerB
         return NoContent();
     }
 
+    [HasPermission(PermissionCodes.AppointmentsBookSelf)]
+    [HttpGet("{appointmentId:guid}/share-preview")]
+    public Task<SharedAppointmentSummary> SharePreview(Guid appointmentId, CancellationToken cancellationToken) =>
+        shares.PreviewAsync(User.GetUserId(), appointmentId, cancellationToken);
+
+    [HasPermission(PermissionCodes.AppointmentsBookSelf)]
+    [HttpGet("{appointmentId:guid}/share-links")]
+    public Task<IReadOnlyList<AppointmentShareLinkStatus>> ListShareLinks(Guid appointmentId, CancellationToken cancellationToken) =>
+        shares.ListLinksAsync(User.GetUserId(), appointmentId, cancellationToken);
+
+    [HasPermission(PermissionCodes.AppointmentsBookSelf)]
+    [HttpPost("{appointmentId:guid}/share-links")]
+    public Task<AppointmentShareLinkDetails> CreateShareLink(
+        Guid appointmentId,
+        [FromBody] CreateAppointmentShareLinkRequest? request,
+        CancellationToken cancellationToken) =>
+        shares.CreateLinkAsync(User.GetUserId(), appointmentId, request?.LifetimeHours, Metadata(), cancellationToken);
+
+    [HasPermission(PermissionCodes.AppointmentsBookSelf)]
+    [HttpPost("{appointmentId:guid}/share-links/{shareId:guid}/revoke")]
+    public async Task<IActionResult> RevokeShareLink(Guid appointmentId, Guid shareId, CancellationToken cancellationToken)
+    {
+        await shares.RevokeLinkAsync(User.GetUserId(), appointmentId, shareId, Metadata(), cancellationToken);
+        return NoContent();
+    }
+
+    [HasPermission(PermissionCodes.AppointmentsBookSelf)]
+    [HttpPost("{appointmentId:guid}/share-links/revoke-all")]
+    public async Task<IActionResult> RevokeAllShareLinks(Guid appointmentId, CancellationToken cancellationToken)
+    {
+        await shares.RevokeAllAsync(User.GetUserId(), appointmentId, Metadata(), cancellationToken);
+        return NoContent();
+    }
+
     private bool CanPractice() =>
-        User.Claims.Any(claim => claim.Type == "perm" && claim.Value is PermissionCodes.AppointmentsManageAssigned or PermissionCodes.ClinicManage or PermissionCodes.AppointmentsBookWalkIn);
+        User.Claims.Any(claim =>
+            claim.Type == "perm"
+            && claim.Value is PermissionCodes.AppointmentsManageAssigned
+                or PermissionCodes.ClinicManage
+                or PermissionCodes.AppointmentsBookWalkIn
+                or PermissionCodes.AppointmentsManageClinic);
 
     private RequestMetadata Metadata() => new(ClientContext.IpAddress(HttpContext), ClientContext.UserAgent(HttpContext));
+
+    private static bool TryParseTime(string? value, out TimeOnly time, out AppError? error)
+    {
+        if (TimeOnly.TryParse(value, out time))
+        {
+            error = null;
+            return true;
+        }
+
+        time = default;
+        error = AppError.Validation(
+            "time_invalid",
+            "Please select a valid time.",
+            new Dictionary<string, string[]> { ["start"] = ["Please select a valid time."] });
+        return false;
+    }
 }

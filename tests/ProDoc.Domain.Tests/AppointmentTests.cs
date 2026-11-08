@@ -54,6 +54,45 @@ public sealed class AppointmentTests
     }
 
     [Fact]
+    public void Patient_cannot_cancel_or_reschedule_after_start_time()
+    {
+        var appointment = Held(requiresApproval: false, startsIn: TimeSpan.FromHours(3));
+        appointment.Confirm("Asha Rao", null, null, null, Now);
+        var afterStart = appointment.StartsAtUtc;
+
+        var cancelError = Assert.Throws<ProDoc.Domain.Common.DomainException>(() =>
+            appointment.Cancel(staff: false, null, afterStart));
+        Assert.Equal("cancellation_closed", cancelError.Code);
+
+        var moveError = Assert.Throws<ProDoc.Domain.Common.DomainException>(() =>
+            appointment.Reschedule(afterStart.AddHours(24), afterStart.AddHours(24).AddMinutes(20), staff: false, afterStart));
+        Assert.Equal("cancellation_closed", moveError.Code);
+        Assert.Equal(AppointmentStatus.Confirmed, appointment.Status);
+    }
+
+    [Fact]
+    public void Patient_cannot_cancel_exactly_at_start_time()
+    {
+        var appointment = Held(requiresApproval: false, startsIn: TimeSpan.FromHours(4));
+        appointment.Confirm("Asha Rao", null, null, null, Now);
+
+        var error = Assert.Throws<ProDoc.Domain.Common.DomainException>(() =>
+            appointment.Cancel(staff: false, null, appointment.StartsAtUtc));
+
+        Assert.Equal("cancellation_closed", error.Code);
+    }
+
+    [Fact]
+    public void Patient_can_cancel_before_the_two_hour_window()
+    {
+        var appointment = Held(requiresApproval: false, startsIn: TimeSpan.FromHours(5));
+        appointment.Confirm("Asha Rao", null, null, null, Now);
+
+        appointment.Cancel(staff: false, "Plans changed", Now.AddMinutes(30));
+        Assert.Equal(AppointmentStatus.Cancelled, appointment.Status);
+    }
+
+    [Fact]
     public void Expired_hold_cannot_be_confirmed()
     {
         var appointment = Held(requiresApproval: false, startsIn: TimeSpan.FromHours(4));
@@ -62,6 +101,63 @@ public sealed class AppointmentTests
 
         Assert.Equal("hold_expired", error.Code);
         Assert.Equal(AppointmentStatus.Expired, appointment.Status);
+    }
+
+    [Fact]
+    public void Patient_can_same_day_reschedule_after_missing_start()
+    {
+        var appointment = Held(requiresApproval: false, startsIn: TimeSpan.FromHours(1));
+        appointment.Confirm("Asha Rao", null, null, null, Now);
+        var afterStart = appointment.StartsAtUtc.AddMinutes(5);
+        var nextStart = afterStart.AddHours(1);
+        var nextEnd = nextStart.AddMinutes(20);
+
+        appointment.Reschedule(nextStart, nextEnd, staff: false, afterStart, reason: "Running late", sameDayMissed: true);
+
+        Assert.Equal(AppointmentStatus.Confirmed, appointment.Status);
+        Assert.Equal(nextStart, appointment.StartsAtUtc);
+        Assert.Equal(1, appointment.SameDayRescheduleCount);
+    }
+
+    [Fact]
+    public void Patient_same_day_reschedule_respects_limit()
+    {
+        var appointment = Held(requiresApproval: false, startsIn: TimeSpan.FromHours(1));
+        appointment.Confirm("Asha Rao", null, null, null, Now);
+        var afterStart = appointment.StartsAtUtc.AddMinutes(5);
+
+        appointment.Reschedule(afterStart.AddHours(1), afterStart.AddHours(1).AddMinutes(20), staff: false, afterStart, sameDayMissed: true);
+        appointment.Reschedule(afterStart.AddHours(2), afterStart.AddHours(2).AddMinutes(20), staff: false, afterStart.AddHours(1).AddMinutes(5), sameDayMissed: true);
+
+        var error = Assert.Throws<ProDoc.Domain.Common.DomainException>(() =>
+            appointment.Reschedule(
+                afterStart.AddHours(3),
+                afterStart.AddHours(3).AddMinutes(20),
+                staff: false,
+                afterStart.AddHours(2).AddMinutes(5),
+                sameDayMissed: true));
+
+        Assert.Equal("reschedule_limit", error.Code);
+        Assert.Equal(2, appointment.SameDayRescheduleCount);
+    }
+
+    [Fact]
+    public void Completed_visit_cannot_be_same_day_rescheduled()
+    {
+        var appointment = Held(requiresApproval: false, startsIn: TimeSpan.FromHours(1));
+        appointment.Confirm("Asha Rao", null, null, null, Now);
+        appointment.MarkCheckedIn(appointment.StartsAtUtc.AddMinutes(1));
+        appointment.MarkCompleted(appointment.StartsAtUtc.AddMinutes(30));
+
+        var error = Assert.Throws<ProDoc.Domain.Common.DomainException>(() =>
+            appointment.Reschedule(
+                appointment.StartsAtUtc.AddHours(2),
+                appointment.StartsAtUtc.AddHours(2).AddMinutes(20),
+                staff: false,
+                appointment.StartsAtUtc.AddMinutes(45),
+                sameDayMissed: true));
+
+        Assert.Equal("appointment_closed", error.Code);
     }
 
     private static Appointment Held(bool requiresApproval, TimeSpan startsIn) =>

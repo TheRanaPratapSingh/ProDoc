@@ -1,12 +1,7 @@
+import { FlashList } from '@shopify/flash-list';
 import { type ReactElement, type ReactNode } from 'react';
-import {
-  FlatList,
-  type FlatListProps,
-  KeyboardAvoidingView,
-  Platform,
-  RefreshControl,
-  View,
-} from 'react-native';
+import { Platform, RefreshControl, View } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { NetworkBanner } from '@/components/layout/network-banner';
@@ -21,8 +16,10 @@ type ScreenListProps<T> = {
   refreshing?: boolean;
   onRefresh?: () => void;
   empty?: ReactNode;
+  /** Kept for API compatibility; FlashList 2 sizes automatically. */
   estimatedItemSize?: number;
-} & Omit<FlatListProps<T>, 'data' | 'renderItem' | 'keyExtractor' | 'ListHeaderComponent' | 'ListEmptyComponent'>;
+  contentContainerStyle?: object;
+};
 
 export function ScreenList<T>({
   header,
@@ -32,24 +29,26 @@ export function ScreenList<T>({
   refreshing,
   onRefresh,
   empty,
-  ...rest
+  contentContainerStyle,
 }: ScreenListProps<T>) {
   const theme = useProdocTheme();
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <NetworkBanner />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <FlatList
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior="padding" automaticOffset>
+        <FlashList
           data={data}
           keyExtractor={keyExtractor}
-          renderItem={renderItem}
-          contentContainerStyle={{ padding: spacing.xl, gap: spacing.md, flexGrow: 1 }}
+          renderItem={({ item, index }) => renderItem({ item, index })}
+          contentContainerStyle={{
+            padding: spacing.xl,
+            paddingBottom: spacing.xxl,
+            ...contentContainerStyle,
+          }}
+          ItemSeparatorComponent={() => <View style={{ height: spacing.md }} />}
           keyboardShouldPersistTaps="handled"
-          initialNumToRender={8}
-          maxToRenderPerBatch={8}
-          windowSize={7}
-          removeClippedSubviews={Platform.OS === 'android'}
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           refreshControl={
             onRefresh ? (
               <RefreshControl refreshing={!!refreshing} onRefresh={onRefresh} tintColor={theme.colors.primary} />
@@ -59,7 +58,6 @@ export function ScreenList<T>({
             header ? <View style={{ gap: spacing.md, marginBottom: spacing.md }}>{header}</View> : undefined
           }
           ListEmptyComponent={empty ? <View style={{ paddingVertical: spacing.xl }}>{empty}</View> : undefined}
-          {...rest}
         />
       </KeyboardAvoidingView>
     </SafeAreaView>

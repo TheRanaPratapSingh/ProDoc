@@ -8,7 +8,8 @@ public enum SupportTicketStatus
     InProgress = 2,
     WaitingOnUser = 3,
     Resolved = 4,
-    Closed = 5
+    Closed = 5,
+    Assigned = 6
 }
 
 public enum SupportTicketPriority
@@ -48,9 +49,13 @@ public sealed class SupportTicket
 
     public Guid CreatedByUserId { get; private set; }
 
+    public string CreatedByRole { get; private set; } = string.Empty;
+
     public Guid? AssignedToUserId { get; private set; }
 
     public SupportTicketCategory Category { get; private set; }
+
+    public string IssueType { get; private set; } = string.Empty;
 
     public SupportTicketPriority Priority { get; private set; }
 
@@ -92,7 +97,9 @@ public sealed class SupportTicket
         DateTimeOffset now,
         Guid? appointmentId = null,
         Guid? paymentId = null,
-        Guid? clinicId = null)
+        Guid? clinicId = null,
+        string? createdByRole = null,
+        string? issueType = null)
     {
         var subj = subject.Trim();
         var body = description.Trim();
@@ -106,12 +113,26 @@ public sealed class SupportTicket
             throw DomainException.Validation("ticket_description_invalid", "Enter a description from 8 to 4000 characters.");
         }
 
+        var issue = string.IsNullOrWhiteSpace(issueType) ? category.ToString() : issueType.Trim();
+        if (issue.Length > 80)
+        {
+            issue = issue[..80];
+        }
+
+        var role = string.IsNullOrWhiteSpace(createdByRole) ? "Patient" : createdByRole.Trim();
+        if (role.Length > 40)
+        {
+            role = role[..40];
+        }
+
         return new SupportTicket
         {
             Id = Guid.NewGuid(),
             Number = number,
             CreatedByUserId = createdByUserId,
+            CreatedByRole = role,
             Category = category,
+            IssueType = issue,
             Priority = priority,
             Status = SupportTicketStatus.Open,
             Subject = subj,
@@ -128,11 +149,37 @@ public sealed class SupportTicket
     public void Assign(Guid? adminUserId, DateTimeOffset now)
     {
         AssignedToUserId = adminUserId;
-        if (adminUserId is not null && Status == SupportTicketStatus.Open)
+        if (adminUserId is not null && Status is SupportTicketStatus.Open or SupportTicketStatus.Assigned)
         {
-            Status = SupportTicketStatus.InProgress;
+            Status = SupportTicketStatus.Assigned;
         }
 
+        UpdatedAtUtc = now;
+    }
+
+    public void Reopen(DateTimeOffset now)
+    {
+        if (Status is not (SupportTicketStatus.Resolved or SupportTicketStatus.Closed))
+        {
+            throw DomainException.Conflict("ticket_not_reopenable", "Only resolved or closed tickets can be reopened.");
+        }
+
+        Status = SupportTicketStatus.Open;
+        ResolvedAtUtc = null;
+        ClosedAtUtc = null;
+        UpdatedAtUtc = now;
+    }
+
+    public void CloseByOwner(DateTimeOffset now)
+    {
+        if (Status is not (SupportTicketStatus.Resolved or SupportTicketStatus.WaitingOnUser))
+        {
+            throw DomainException.Conflict("ticket_not_closable", "Only resolved tickets (or those waiting on you) can be closed.");
+        }
+
+        Status = SupportTicketStatus.Closed;
+        ClosedAtUtc ??= now;
+        ResolvedAtUtc ??= now;
         UpdatedAtUtc = now;
     }
 

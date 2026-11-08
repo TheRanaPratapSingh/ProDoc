@@ -45,17 +45,45 @@ public sealed class DiscoveryService(IScheduleStore schedules, IPlaceLinkBuilder
         clock.UtcNow,
         TimeZoneInfo.TryFindSystemTimeZoneById(ConsultationSchedule.DefaultTimeZone, out var zone) ? zone : TimeZoneInfo.Utc).DateTime);
 
-    private DiscoveryPlace WithLink(DiscoveryPlace place) =>
-        place with { DirectionsUrl = links.DirectionsUrl(place.Latitude, place.Longitude, JoinAddress(place.AddressLine, place.City)) };
+    private DiscoveryPlace WithLink(DiscoveryPlace place)
+    {
+        var input = new PlaceLinkInput(
+            place.ClinicName ?? place.BranchName,
+            place.FormattedAddress ?? JoinAddress(place.AddressLine, place.City),
+            place.Latitude,
+            place.Longitude,
+            place.GooglePlaceId);
+        return place with
+        {
+            MapsUrl = links.MapsUrl(input),
+            DirectionsUrl = links.DirectionsUrl(input)
+        };
+    }
 
     private DiscoveredClinic WithClinicLinks(DiscoveredClinic clinic) =>
-        clinic with { Branches = clinic.Branches.Select(branch => branch with
+        clinic with
         {
-            DirectionsUrl = links.DirectionsUrl(branch.Latitude, branch.Longitude, JoinAddress(branch.AddressLine, branch.City))
-        }).ToArray() };
+            Branches = clinic.Branches.Select(branch =>
+            {
+                var input = new PlaceLinkInput(
+                    branch.Name,
+                    branch.FormattedAddress ?? JoinAddress(branch.AddressLine, branch.City),
+                    branch.Latitude,
+                    branch.Longitude,
+                    branch.GooglePlaceId);
+                return branch with
+                {
+                    MapsUrl = links.MapsUrl(input),
+                    DirectionsUrl = links.DirectionsUrl(input)
+                };
+            }).ToArray()
+        };
 
-    private static string? JoinAddress(string? line, string? city) =>
-        string.Join(", ", new[] { line, city }.Where(part => !string.IsNullOrWhiteSpace(part)));
+    private static string? JoinAddress(string? line, string? city)
+    {
+        var joined = string.Join(", ", new[] { line, city }.Where(part => !string.IsNullOrWhiteSpace(part)));
+        return string.IsNullOrWhiteSpace(joined) ? null : joined;
+    }
 
     private static DiscoveryQuery Normalize(DiscoveryQuery query)
     {

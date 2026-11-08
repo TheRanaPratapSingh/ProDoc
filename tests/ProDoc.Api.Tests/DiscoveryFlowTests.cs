@@ -15,10 +15,12 @@ public sealed class DiscoveryFlowTests(ProDocApiFactory factory)
     {
         var doctor = await SignInAsync("9000000021");
         var visitor = await SignInAsync("9000000022");
-        var admin = await SignInAsync("9000000001");
+        var admin = await SignInAsync("9000000001", purpose: "admin");
         var specializations = await SendAsync(HttpMethod.Get, "/api/v1/specializations", doctor.AccessToken);
         var cardiology = (await specializations.Content.ReadFromJsonAsync<SpecializationBody[]>())!.Single(item => item.Code == "cardiology");
 
+        await ProviderSeed.EnsureDoctorRoleAsync(_client, doctor.AccessToken, admin.AccessToken);
+        doctor = await SignInAsync("9000000021");
         await SendAsync(HttpMethod.Put, "/api/v1/doctors/me/basics", doctor.AccessToken, JsonContent.Create(new
         {
             firstName = "Nila",
@@ -62,8 +64,8 @@ public sealed class DiscoveryFlowTests(ProDocApiFactory factory)
         var doctorId = submitted.GetProperty("id").GetGuid();
         await SendAsync(HttpMethod.Post, $"/api/v1/admin/verifications/doctors/{doctorId}", admin.AccessToken, JsonContent.Create(new { decision = "Approve" }));
 
-        var clinic = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/clinics", doctor.AccessToken));
-        var clinicId = clinic.GetProperty("id").GetGuid();
+        var ownerUserId = await ProviderSeed.GetUserIdAsync(_client, doctor.AccessToken);
+        var clinicId = await ProviderSeed.CreateClinicOwnedByAsync(_client, admin.AccessToken, ownerUserId);
         await SendAsync(HttpMethod.Put, $"/api/v1/clinics/{clinicId}", doctor.AccessToken, JsonContent.Create(new
         {
             name = "Desai Heart Clinic",
@@ -95,7 +97,7 @@ public sealed class DiscoveryFlowTests(ProDocApiFactory factory)
         }));
 
         var listedBeforeSchedule = await SendAsync(HttpMethod.Get, "/api/v1/doctors?query=Nila", visitor.AccessToken);
-        Assert.Equal(doctorId, (await listedBeforeSchedule.Content.ReadFromJsonAsync<JsonElement[]>())!.Single().GetProperty("id").GetGuid());
+        Assert.Empty((await listedBeforeSchedule.Content.ReadFromJsonAsync<JsonElement[]>())!);
         var hidden = await SendAsync(HttpMethod.Get, "/api/v1/discovery?query=Nila", visitor.AccessToken);
         Assert.Empty((await hidden.Content.ReadFromJsonAsync<JsonElement[]>())!);
 
@@ -133,6 +135,9 @@ public sealed class DiscoveryFlowTests(ProDocApiFactory factory)
             reason = "Camp day"
         })));
         await SendAsync(HttpMethod.Post, $"/api/v1/schedules/{scheduleId}/publication", doctor.AccessToken, JsonContent.Create(new { isPublished = true }));
+
+        var listedAfterPublish = await SendAsync(HttpMethod.Get, "/api/v1/doctors?query=Nil", visitor.AccessToken);
+        Assert.Equal(doctorId, (await listedAfterPublish.Content.ReadFromJsonAsync<JsonElement[]>())!.Single().GetProperty("id").GetGuid());
 
         var unpublishedSlots = tomorrow;
         var closedSlots = await SendAsync(HttpMethod.Get, $"/api/v1/schedules/{scheduleId}/slots?date={unpublishedSlots:yyyy-MM-dd}", visitor.AccessToken);
@@ -176,15 +181,15 @@ public sealed class DiscoveryFlowTests(ProDocApiFactory factory)
         Assert.Equal(HttpStatusCode.NotFound, missingProfile.StatusCode);
     }
 
-    private async Task<SessionBody> SignInAsync(string phone)
+    private async Task<SessionBody> SignInAsync(string phone, string? purpose = null)
     {
-        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone });
+        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone, purpose });
         var otpBody = await otpResponse.Content.ReadAsStringAsync();
         Assert.True(otpResponse.IsSuccessStatusCode, otpBody);
         var otp = JsonSerializer.Deserialize<OtpBody>(otpBody, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         var verifyResponse = await _client.PostAsJsonAsync(
             "/api/v1/auth/otp/verify",
-            new { phoneNumber = phone, code = otp!.DevelopmentCode, deviceName = "integration-test" });
+            new { phoneNumber = phone, code = otp!.DevelopmentCode, deviceName = "integration-test", purpose });
         var verifyBody = await verifyResponse.Content.ReadAsStringAsync();
         Assert.True(verifyResponse.IsSuccessStatusCode, verifyBody);
         return JsonSerializer.Deserialize<SessionBody>(verifyBody, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;

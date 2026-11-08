@@ -100,6 +100,17 @@ public interface IMedicalStore
     Task<FamilyMember?> FindFamilyMemberAsync(Guid familyMemberId, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<PatientMedicalRecord>> ListRecordsForAccountAsync(Guid accountUserId, CancellationToken cancellationToken);
+
+    Task<(int InProgress, int CompletedToday, int WithPrescriptionToday)> CountDoctorActivityAsync(
+        Guid doctorId,
+        DateOnly today,
+        Guid? clinicId,
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<ProDoc.Application.Providers.DoctorPrescriptionRow>> ListDoctorPrescriptionsAsync(
+        Guid doctorId,
+        Guid? clinicId,
+        CancellationToken cancellationToken);
 }
 
 public interface IPrescriptionPdfGenerator

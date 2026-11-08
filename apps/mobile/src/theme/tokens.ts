@@ -1,12 +1,26 @@
 /** ProDoc Design 1 — Clean & Trustworthy Healthcare + Earth Green */
 
+/** Startup splash — Earth Green gradient surfaces (native + React). */
+export const splashPalette = {
+  deep: '#285849',
+  mid: '#356F5E',
+  mint: '#EAF3EF',
+  onDeep: '#FFFFFF',
+  markPlate: '#1F4A3E',
+  glow: 'rgba(234, 243, 239, 0.16)',
+  glowSoft: 'rgba(53, 111, 94, 0.55)',
+  orb: 'rgba(234, 243, 239, 0.14)',
+  crossPlate: 'rgba(234, 243, 239, 0.16)',
+  cross: '#EAF3EF',
+} as const;
+
 export const palette = {
   light: {
     primary: '#356F5E',
     primaryPressed: '#285849',
     primaryLight: '#EAF3EF',
     onPrimary: '#FFFFFF',
-    /** Informational only — never primary actions */
+    /** Informational accent — never primary actions */
     secondary: '#3B82A0',
     accent: '#4A7C6F',
     highlight: '#D99A35',
@@ -16,6 +30,7 @@ export const palette = {
     background: '#F7FAFC',
     surface: '#FFFFFF',
     text: '#14243D',
+    /** Brand secondary text #64748B */
     textMuted: '#64748B',
     border: '#E2E8F0',
     brandTint: '#EAF3EF',
@@ -97,6 +112,22 @@ export const duration = {
   press: 140,
   enter: 260,
   modal: 220,
+  skeleton: 700,
+  stagger: 40,
+} as const;
+
+/** Subtle motion — no bounce; pair with reduceMotion checks. */
+export const motion = {
+  pressScale: 0.97,
+  cardPressScale: 0.985,
+  enterDistance: 12,
+} as const;
+
+export const layout = {
+  phoneMax: 430,
+  contentPad: 20,
+  sectionGap: 18,
+  listGap: 12,
 } as const;
 
 export const breakpoint = {

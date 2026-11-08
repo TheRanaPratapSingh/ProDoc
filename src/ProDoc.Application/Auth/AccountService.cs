@@ -17,12 +17,40 @@ public sealed class AccountService(IAuthStore store, IClock clock, ILogger<Accou
     public async Task<AccountSnapshot> UpdateProfileAsync(UpdateProfileCommand command, CancellationToken cancellationToken)
     {
         var now = clock.UtcNow;
-        await store.UpdatePatientProfileAsync(command.UserId, command.FullName, command.PreferredLanguage, now, cancellationToken);
+        await store.UpdatePatientProfileAsync(
+            command.UserId,
+            command.FullName,
+            command.PreferredLanguage,
+            now,
+            cancellationToken,
+            command.AgeYears,
+            command.Gender);
         await store.AddAuditLogAsync(
             AuditLog.Record(command.UserId, AuditActions.ProfileUpdated, now, command.IpAddress, command.UserAgent),
             cancellationToken);
         await store.SaveChangesAsync(cancellationToken);
         logger.LogInformation("Updated profile for user {UserId}", command.UserId);
+        return await GetAsync(command.UserId, cancellationToken);
+    }
+
+    public async Task<AccountSnapshot> CompleteProfileAsync(
+        CompletePatientProfileCommand command,
+        CancellationToken cancellationToken)
+    {
+        var now = clock.UtcNow;
+        await store.CompletePatientProfileAsync(
+            command.UserId,
+            command.FullName,
+            command.AgeYears,
+            command.Gender,
+            command.PreferredLanguage,
+            now,
+            cancellationToken);
+        await store.AddAuditLogAsync(
+            AuditLog.Record(command.UserId, AuditActions.ProfileUpdated, now, command.IpAddress, command.UserAgent),
+            cancellationToken);
+        await store.SaveChangesAsync(cancellationToken);
+        logger.LogInformation("Completed basic profile for user {UserId}", command.UserId);
         return await GetAsync(command.UserId, cancellationToken);
     }
 

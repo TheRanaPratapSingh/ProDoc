@@ -17,6 +17,8 @@ public interface IGrowthStore
 
     Task<IReadOnlyList<ReferralRelationship>> ListRelationshipsForReferrerAsync(Guid referrerUserId, int take, CancellationToken cancellationToken);
 
+    Task<IReadOnlyDictionary<Guid, string>> FindPatientDisplayNamesAsync(IReadOnlyList<Guid> userIds, CancellationToken cancellationToken);
+
     Task<int> CountReferralRewardsTodayAsync(Guid referrerUserId, DateTimeOffset dayStartUtc, CancellationToken cancellationToken);
 
     void AddReferralRelationship(ReferralRelationship relationship);
@@ -24,6 +26,13 @@ public interface IGrowthStore
     Task<RewardAccount?> FindRewardAccountAsync(Guid userId, bool tracking, CancellationToken cancellationToken);
 
     void AddRewardAccount(RewardAccount account);
+
+    /// <summary>Idempotent create under concurrent dashboard loads (unique UserId).</summary>
+    Task<RewardAccount> GetOrCreateRewardAccountAsync(Guid userId, DateTimeOffset now, CancellationToken cancellationToken);
+
+    Task<ReferralCode> GetOrCreateReferralCodeAsync(Guid userId, DateTimeOffset now, CancellationToken cancellationToken);
+
+    Task<MarketingConsent> GetOrCreateConsentAsync(Guid userId, DateTimeOffset now, CancellationToken cancellationToken);
 
     Task<RewardTransaction?> FindRewardByIdempotencyAsync(string idempotencyKey, CancellationToken cancellationToken);
 

@@ -1,5 +1,10 @@
-import { ReceptionDesk } from '@/features/queue/reception-desk';
+import { ReceptionHome } from '@/features/reception/reception-home';
+import { useRequireSurface } from '@/navigation/use-require-surface';
 
 export default function ReceptionRoute() {
-  return <ReceptionDesk />;
+  const { ready } = useRequireSurface('reception');
+  if (!ready) {
+    return null;
+  }
+  return <ReceptionHome />;
 }

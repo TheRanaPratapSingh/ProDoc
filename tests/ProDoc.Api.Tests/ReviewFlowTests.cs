@@ -16,7 +16,7 @@ public sealed class ReviewFlowTests(ProDocApiFactory factory)
         var doctor = await SignInAsync("9000000101");
         var patient = await SignInAsync("9000000102");
         var stranger = await SignInAsync("9000000103");
-        var admin = await SignInAsync("9000000001");
+        var admin = await SignInAsync("9000000001", purpose: "admin");
         await SendAsync(HttpMethod.Put, "/api/v1/account/profile", patient.AccessToken, JsonContent.Create(new
         {
             fullName = "Riya Sen",
@@ -65,17 +65,28 @@ public sealed class ReviewFlowTests(ProDocApiFactory factory)
         }));
         Assert.Equal(HttpStatusCode.BadRequest, notEligible.StatusCode);
 
+        var emptyReview = await SendAsync(HttpMethod.Post, "/api/v1/reviews", patient.AccessToken, JsonContent.Create(new
+        {
+            appointmentId,
+            targetKind = "Doctor",
+            body = "   "
+        }));
+        Assert.Equal(HttpStatusCode.BadRequest, emptyReview.StatusCode);
+
         var created = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/reviews", patient.AccessToken, JsonContent.Create(new
         {
             appointmentId,
             targetKind = "Doctor",
             overallRating = 5,
             communicationRating = 5,
+            staffBehaviourRating = 5,
+            consultationRating = 4,
             waitingTimeRating = 4,
             body = "Clear explanation and verified visit."
         })));
         Assert.True(created.GetProperty("isVerifiedVisit").GetBoolean());
         Assert.Equal("Published", created.GetProperty("status").GetString());
+        Assert.Equal(4, created.GetProperty("consultationRating").GetInt32());
         var reviewId = created.GetProperty("id").GetGuid();
 
         var duplicate = await SendAsync(HttpMethod.Post, "/api/v1/reviews", patient.AccessToken, JsonContent.Create(new
@@ -86,9 +97,18 @@ public sealed class ReviewFlowTests(ProDocApiFactory factory)
         }));
         Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
 
+        var clinicOnlyComment = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/reviews", patient.AccessToken, JsonContent.Create(new
+        {
+            appointmentId,
+            targetKind = "Clinic",
+            body = "Clean waiting area and helpful front desk."
+        })));
+        Assert.Equal(JsonValueKind.Null, clinicOnlyComment.GetProperty("overallRating").ValueKind);
+        Assert.Equal("Clinic", clinicOnlyComment.GetProperty("targetKind").GetString());
+
         var summary = await ReadAsync(await SendAsync(HttpMethod.Get, $"/api/v1/doctors/{created.GetProperty("doctorId").GetGuid()}/rating-summary", patient.AccessToken));
-        Assert.False(summary.GetProperty("averageIsPublic").GetBoolean());
-        Assert.Equal(JsonValueKind.Null, summary.GetProperty("averageOverall").ValueKind);
+        Assert.True(summary.GetProperty("averageIsPublic").GetBoolean());
+        Assert.Equal(5m, summary.GetProperty("averageOverall").GetDecimal());
         Assert.Equal(1, summary.GetProperty("publishedReviewCount").GetInt32());
 
         var responded = await ReadAsync(await SendAsync(HttpMethod.Post, $"/api/v1/reviews/{reviewId}/responses", doctor.AccessToken, JsonContent.Create(new
@@ -131,6 +151,8 @@ public sealed class ReviewFlowTests(ProDocApiFactory factory)
 
     private async Task<(Guid ScheduleId, Guid ClinicId, Guid BranchId, Guid DoctorId)> PublishAsync(SessionBody doctor, SessionBody admin, Guid specializationId)
     {
+        await ProviderSeed.EnsureDoctorRoleAsync(_client, doctor.AccessToken, admin.AccessToken);
+        doctor = await SignInAsync("9000000101");
         await SendAsync(HttpMethod.Put, "/api/v1/doctors/me/basics", doctor.AccessToken, JsonContent.Create(new
         {
             firstName = "Ravi",
@@ -174,8 +196,8 @@ public sealed class ReviewFlowTests(ProDocApiFactory factory)
         var doctorId = submitted.GetProperty("id").GetGuid();
         await SendAsync(HttpMethod.Post, $"/api/v1/admin/verifications/doctors/{doctorId}", admin.AccessToken, JsonContent.Create(new { decision = "Approve" }));
 
-        var clinic = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/clinics", doctor.AccessToken));
-        var clinicId = clinic.GetProperty("id").GetGuid();
+        var ownerUserId = await ProviderSeed.GetUserIdAsync(_client, doctor.AccessToken);
+        var clinicId = await ProviderSeed.CreateClinicOwnedByAsync(_client, admin.AccessToken, ownerUserId);
         await SendAsync(HttpMethod.Put, $"/api/v1/clinics/{clinicId}", doctor.AccessToken, JsonContent.Create(new
         {
             name = "Mehta Clinic",
@@ -229,9 +251,9 @@ public sealed class ReviewFlowTests(ProDocApiFactory factory)
         return body.GetProperty("slots").EnumerateArray().Select(slot => slot.GetProperty("start").GetString()!).ToArray();
     }
 
-    private async Task<SessionBody> SignInAsync(string phone)
+    private async Task<SessionBody> SignInAsync(string phone, string? purpose = null)
     {
-        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone });
+        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone, purpose });
         var otpBody = await otpResponse.Content.ReadAsStringAsync();
         Assert.True(otpResponse.IsSuccessStatusCode, otpBody);
         var otp = JsonSerializer.Deserialize<OtpBody>(otpBody, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -239,7 +261,8 @@ public sealed class ReviewFlowTests(ProDocApiFactory factory)
         {
             phoneNumber = phone,
             code = otp!.DevelopmentCode,
-            deviceName = "integration-test"
+            deviceName = "integration-test",
+            purpose
         });
         var verifyBody = await verifyResponse.Content.ReadAsStringAsync();
         Assert.True(verifyResponse.IsSuccessStatusCode, verifyBody);
@@ -273,7 +296,11 @@ public sealed class ReviewFlowTests(ProDocApiFactory factory)
     private static async Task<JsonElement> ReadAsync(HttpResponseMessage response)
     {
         var body = await response.Content.ReadAsStringAsync();
-        Assert.True(response.StatusCode == HttpStatusCode.OK, body);
+        if (response.StatusCode != HttpStatusCode.OK)
+        {
+            throw new Xunit.Sdk.XunitException($"{(int)response.StatusCode} {response.ReasonPhrase}: {body}");
+        }
+
         using var document = JsonDocument.Parse(body);
         return document.RootElement.Clone();
     }

@@ -1,7 +1,10 @@
 using Microsoft.Extensions.Logging;
 using ProDoc.Application.Abstractions;
 using ProDoc.Application.Automation;
+using ProDoc.Application.Billing;
+using ProDoc.Application.Growth;
 using ProDoc.Application.Providers;
+using ProDoc.Application.Reviews;
 using ProDoc.Domain.Appointments;
 using ProDoc.Domain.Automation;
 using ProDoc.Domain.Clinical;
@@ -18,6 +21,9 @@ public sealed class MedicalService(
     IUploadScanner scanner,
     IPrescriptionPdfGenerator pdfs,
     IAutomationEventBus automation,
+    FinanceService finance,
+    ReviewService reviews,
+    GrowthService growth,
     IClock clock,
     ILogger<MedicalService> logger)
 {
@@ -28,17 +34,15 @@ public sealed class MedicalService(
         CancellationToken cancellationToken)
     {
         var doctor = await RequireApprovedDoctorAsync(userId, cancellationToken);
-        var appointment = await store.FindAppointmentAsync(appointmentId, false, cancellationToken)
+        // Track so we can approve / check-in when the doctor opens the workspace.
+        var appointment = await store.FindAppointmentAsync(appointmentId, tracking: true, cancellationToken)
             ?? throw DomainException.NotFound("appointment_not_found", "That appointment was not found.");
         if (appointment.DoctorId != doctor.Id)
         {
             throw DomainException.NotFound("appointment_not_found", "That appointment was not found.");
         }
 
-        if (appointment.Status is not (AppointmentStatus.CheckedIn or AppointmentStatus.Completed or AppointmentStatus.Confirmed))
-        {
-            throw DomainException.Conflict("consultation_not_ready", "Open a checked-in or completed visit for consultation.");
-        }
+        await EnsureReadyForConsultationAsync(appointment, userId, metadata, cancellationToken);
 
         var record = await EnsureRecordAsync(appointment.AccountUserId, appointment.FamilyMemberId, appointment.PatientName, cancellationToken);
         await AccessAsync(userId, record.Id, MedicalAccessAction.RecordViewed, metadata, cancellationToken);
@@ -66,12 +70,14 @@ public sealed class MedicalService(
         CancellationToken cancellationToken)
     {
         var doctor = await RequireApprovedDoctorAsync(userId, cancellationToken);
-        var appointment = await store.FindAppointmentAsync(appointmentId, false, cancellationToken)
+        var appointment = await store.FindAppointmentAsync(appointmentId, tracking: true, cancellationToken)
             ?? throw DomainException.NotFound("appointment_not_found", "That appointment was not found.");
         if (appointment.DoctorId != doctor.Id)
         {
             throw DomainException.NotFound("appointment_not_found", "That appointment was not found.");
         }
+
+        await EnsureReadyForConsultationAsync(appointment, userId, metadata, cancellationToken);
 
         var existing = await store.FindActiveConsultationForAppointmentAsync(appointmentId, cancellationToken);
         if (existing is not null)
@@ -145,7 +151,74 @@ public sealed class MedicalService(
             Audit(userId, complete ? AuditActions.ConsultationCompleted : AuditActions.ConsultationUpdated, metadata),
             cancellationToken);
         await store.SaveChangesAsync(cancellationToken);
+
+        if (complete && consultation.AppointmentId is Guid appointmentId)
+        {
+            await CompleteLinkedAppointmentAsync(userId, appointmentId, metadata, cancellationToken);
+        }
+
+        // Follow-up recommendations are created explicitly via FollowUpService (doctor portal /
+        // consultation complete UI). Consultation.FollowUpDate remains clinical history only.
+
         return await MapConsultationAsync(consultation, cancellationToken);
+    }
+
+    private async Task CompleteLinkedAppointmentAsync(
+        Guid userId,
+        Guid appointmentId,
+        RequestMetadata metadata,
+        CancellationToken cancellationToken)
+    {
+        var appointment = await store.FindAppointmentAsync(appointmentId, tracking: true, cancellationToken);
+        if (appointment is null || appointment.Status is not (AppointmentStatus.CheckedIn or AppointmentStatus.Confirmed))
+        {
+            return;
+        }
+
+        appointment.MarkCompleted(clock.UtcNow);
+        await store.AddAuditAsync(Audit(userId, AuditActions.AppointmentCompleted, metadata), cancellationToken);
+        await store.SaveChangesAsync(cancellationToken);
+        await finance.CaptureCommissionForCompletedAppointmentAsync(appointmentId, cancellationToken);
+        if (!appointment.IsWalkIn)
+        {
+            await reviews.NotifyReviewRequestAsync(appointment.AccountUserId, appointment.Id, cancellationToken);
+            await growth.OnAppointmentCompletedAsync(appointmentId, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Doctor opening the consultation workspace implies the visit is being seen.
+    /// Promote Requested → Confirmed → CheckedIn so clinical work can proceed.
+    /// </summary>
+    /// <summary>
+    /// Doctor opening the clinical workspace is the gate for seeing the patient:
+    /// approve pending requests and check in confirmed visits automatically.
+    /// </summary>
+    private async Task EnsureReadyForConsultationAsync(
+        Appointment appointment,
+        Guid userId,
+        RequestMetadata metadata,
+        CancellationToken cancellationToken)
+    {
+        if (appointment.Status is AppointmentStatus.CheckedIn or AppointmentStatus.Completed)
+        {
+            return;
+        }
+
+        var previous = appointment.Status;
+        appointment.PrepareForDoctorConsultation(clock.UtcNow);
+
+        if (previous == AppointmentStatus.Requested)
+        {
+            await store.AddAuditAsync(Audit(userId, AuditActions.AppointmentApproved, metadata), cancellationToken);
+        }
+
+        if (appointment.Status == AppointmentStatus.CheckedIn && previous != AppointmentStatus.CheckedIn)
+        {
+            await store.AddAuditAsync(Audit(userId, AuditActions.AppointmentCheckedIn, metadata), cancellationToken);
+        }
+
+        await store.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<ConsultationDetails> GetConsultationAsync(
@@ -415,17 +488,33 @@ public sealed class MedicalService(
             row.Documents.Count)).ToArray();
     }
 
-    public async Task<MedicalRecordDetails> GetRecordAsync(
+    public async Task<AppResult<MedicalRecordDetails>> GetRecordAsync(
         Guid userId,
         Guid recordId,
         RequestMetadata metadata,
         CancellationToken cancellationToken)
     {
-        var record = await store.FindRecordByIdAsync(recordId, false, cancellationToken)
-            ?? throw DomainException.NotFound("medical_record_not_found", "That medical record was not found.");
-        await EnsureCanReadRecordAsync(userId, record.Id, record.AccountUserId, record.FamilyMemberId, null, cancellationToken);
+        var record = await store.FindRecordByIdAsync(recordId, false, cancellationToken);
+        if (record is null)
+        {
+            return AppResult<MedicalRecordDetails>.NotFound(
+                "medical_record_not_found",
+                "That medical record was not found.");
+        }
+
+        if (await FindRecordReadErrorAsync(
+                userId,
+                record.Id,
+                record.AccountUserId,
+                record.FamilyMemberId,
+                null,
+                cancellationToken) is { } accessError)
+        {
+            return AppResult<MedicalRecordDetails>.Failure(accessError);
+        }
+
         await AccessAsync(userId, record.Id, MedicalAccessAction.RecordViewed, metadata, cancellationToken);
-        return await MapRecordAsync(record, cancellationToken);
+        return AppResult<MedicalRecordDetails>.Success(await MapRecordAsync(record, cancellationToken));
     }
 
     public async Task<AllergyDetails> UpsertAllergyAsync(
@@ -667,33 +756,64 @@ public sealed class MedicalService(
         Guid? treatingDoctorId,
         CancellationToken cancellationToken)
     {
+        if (await FindRecordReadErrorAsync(
+                userId,
+                recordId,
+                accountUserId,
+                familyMemberId,
+                treatingDoctorId,
+                cancellationToken) is { } error)
+        {
+            throw error.StatusCode switch
+            {
+                409 => DomainException.Conflict(error.Code, error.Message),
+                _ => DomainException.NotFound(error.Code, error.Message)
+            };
+        }
+    }
+
+    private async Task<AppError?> FindRecordReadErrorAsync(
+        Guid userId,
+        Guid recordId,
+        Guid accountUserId,
+        Guid? familyMemberId,
+        Guid? treatingDoctorId,
+        CancellationToken cancellationToken)
+    {
         if (accountUserId == userId)
         {
-            return;
+            return null;
         }
 
         var doctor = await store.FindDoctorByUserAsync(userId, cancellationToken);
-        if (doctor is null || doctor.Status != VerificationStatus.Approved)
+        if (doctor is null)
         {
-            throw DomainException.NotFound("medical_record_not_found", "That medical record was not found.");
+            return AppError.NotFound("medical_record_not_found", "That medical record was not found.");
+        }
+
+        if (doctor.Status != VerificationStatus.Approved)
+        {
+            return AppError.Conflict(
+                "doctor_not_verified",
+                "Only an approved doctor can open another patient's medical record.");
         }
 
         if (treatingDoctorId == doctor.Id)
         {
-            return;
+            return null;
         }
 
         if (await store.DoctorHasCareRelationshipAsync(doctor.Id, accountUserId, familyMemberId, cancellationToken))
         {
-            return;
+            return null;
         }
 
         if (await DoctorOwnsRelatedConsultationAsync(doctor.Id, recordId, cancellationToken))
         {
-            return;
+            return null;
         }
 
-        throw DomainException.NotFound("medical_record_not_found", "That medical record was not found.");
+        return AppError.NotFound("medical_record_not_found", "That medical record was not found.");
     }
 
     private async Task<Doctor> RequireApprovedDoctorAsync(Guid userId, CancellationToken cancellationToken)

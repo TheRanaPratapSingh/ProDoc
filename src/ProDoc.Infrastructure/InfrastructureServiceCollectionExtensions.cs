@@ -20,6 +20,7 @@ using ProDoc.Application.Enterprise;
 using ProDoc.Application.Growth;
 using ProDoc.Application.Integrations;
 using ProDoc.Application.Mobile;
+using ProDoc.Application.Notifications;
 using ProDoc.Application.Queue;
 using ProDoc.Application.Reviews;
 using ProDoc.Application.Partners;
@@ -31,6 +32,7 @@ using ProDoc.Infrastructure.SaaS;
 using ProDoc.Infrastructure.Growth;
 using ProDoc.Infrastructure.Integrations;
 using ProDoc.Infrastructure.Mobile;
+using ProDoc.Infrastructure.Notifications;
 using ProDoc.Infrastructure.Queue;
 using ProDoc.Infrastructure.Support;
 using ProDoc.Application.Auth;
@@ -113,6 +115,8 @@ public static class InfrastructureServiceCollectionExtensions
         }
 
         services.AddScoped<IAuthStore, AuthStore>();
+        services.AddScoped<IStaffInvitationStore, StaffInvitationStore>();
+        services.AddScoped<IAdminClinicStore, AdminClinicStore>();
         services.AddScoped<IProviderStore, ProviderStore>();
         services.AddScoped<IScheduleStore, ScheduleStore>();
         services.AddScoped<AppointmentStore>();
@@ -120,7 +124,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ISlotOccupancy>(provider => provider.GetRequiredService<AppointmentStore>());
         services.AddScoped<IQueueStore, QueueStore>();
         services.AddScoped<IQueueRealtime, SignalRQueueRealtime>();
+        services.AddScoped<INotificationStore, NotificationStore>();
+        services.AddScoped<INotificationRealtime, SignalRNotificationRealtime>();
         services.AddScoped<IMedicalStore, MedicalStore>();
+        services.AddScoped<IFollowUpStore, FollowUpStore>();
         services.AddSingleton<IPrescriptionPdfGenerator, PrescriptionPdfGenerator>();
         services.AddScoped<IFinanceStore, FinanceStore>();
         services.AddScoped<IAdminStore, AdminStore>();
@@ -183,6 +190,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSignalR();
         services.AddSingleton<IPlaceLinkBuilder, MapLinkBuilder>();
         services.AddOptions<MapOptions>().Bind(configuration.GetSection(MapOptions.SectionName));
+        services.AddOptions<AppointmentShareOptions>().Bind(configuration.GetSection(AppointmentShareOptions.SectionName));
         services.AddScoped<ProviderSeeder>();
         services.AddSingleton<IUploadScanner, SignatureAllowListScanner>();
         services.AddSingleton<IDocumentStorage, LocalDocumentStorage>();

@@ -1,14 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter, type Href } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { ScrollView, View } from 'react-native';
+import Animated, { FadeInDown } from 'react-native-reanimated';
 
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { StatusBadge } from '@/components/ui/status-badge';
+import { PatientCard } from '@/components/ui/patient-card';
+import { PhoneInput } from '@/components/ui/phone-input';
+import { SectionHeader } from '@/components/ui/section-header';
+import { DashboardStatCard } from '@/components/ui/stat-card';
 import { AppText } from '@/components/ui/text';
 import { TextField } from '@/components/ui/text-field';
 import { useCopy } from '@/i18n/copy';
+import { indianMobileOptionalSchema, indianMobileSchema } from '@/schemas/common';
+import { useProdocTheme } from '@/theme/prodoc-theme';
+import { duration, spacing } from '@/theme/tokens';
 import {
   assignClinicStaff,
   checkInAppointment,
@@ -22,6 +31,7 @@ import {
   searchBranchAppointments,
 } from '@/services/api/queue-api';
 import { useSessionStore } from '@/stores/session-store';
+import { normalizeIndianMobile } from '@/utils/phone';
 import { problemMessage } from '@/utils/problem';
 
 function today() {
@@ -30,6 +40,7 @@ function today() {
 
 export function ReceptionDesk() {
   const copy = useCopy();
+  const theme = useProdocTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
   const canManageStaff = useSessionStore((state) => state.account?.permissions.includes('staff.manage') ?? false);
@@ -64,13 +75,22 @@ export function ReceptionDesk() {
     enabled: Boolean(activeClinicId && canManageStaff),
   });
   const search = useMutation({
-    mutationFn: () =>
-      searchBranchAppointments(activeClinicId, activeBranchId, {
+    mutationFn: () => {
+      const phoneCheck = indianMobileOptionalSchema.safeParse(phone);
+      if (!phoneCheck.success) {
+        throw new Error(phoneCheck.error.issues[0]?.message ?? 'Enter a valid Indian mobile number.');
+      }
+      const normalizedPhone = phone.trim() ? normalizeIndianMobile(phone) : null;
+      if (phone.trim() && !normalizedPhone) {
+        throw new Error('Enter a valid Indian mobile number.');
+      }
+      return searchBranchAppointments(activeClinicId, activeBranchId, {
         reference: reference || undefined,
         patientName: patientName || undefined,
-        phone: phone || undefined,
+        phone: normalizedPhone ?? undefined,
         date: today(),
-      }),
+      });
+    },
   });
   const checkIn = useMutation({
     mutationFn: (appointmentId: string) => checkInAppointment(appointmentId),
@@ -91,7 +111,17 @@ export function ReceptionDesk() {
     onSuccess: () => setWalkInName(''),
   });
   const assign = useMutation({
-    mutationFn: () => assignClinicStaff(activeClinicId, { phoneNumber: staffPhone, role: 'Receptionist' }),
+    mutationFn: () => {
+      const parsed = indianMobileSchema.safeParse(staffPhone);
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues[0]?.message ?? 'Enter a valid Indian mobile number.');
+      }
+      const phoneNumber = normalizeIndianMobile(parsed.data);
+      if (!phoneNumber) {
+        throw new Error('Enter a valid Indian mobile number.');
+      }
+      return assignClinicStaff(activeClinicId, { phoneNumber, role: 'Receptionist' });
+    },
     onSuccess: async () => {
       setStaffPhone('');
       await queryClient.invalidateQueries({ queryKey: ['clinic', 'staff', activeClinicId] });
@@ -111,94 +141,156 @@ export function ReceptionDesk() {
   const error =
     search.error ?? checkIn.error ?? qr.error ?? walkIn.error ?? assign.error ?? saveSettings.error ?? clinics.error;
 
+  const checkedInCount = useMemo(
+    () => (search.data ?? []).filter((item) => item.status === 'CheckedIn').length,
+    [search.data],
+  );
+  const enter = theme.reduceMotion ? undefined : FadeInDown.duration(duration.enter);
+
   return (
     <AuthScaffold>
-      <Button label={copy.back} variant="ghost" onPress={() => router.back()} />
-      <AppText variant="title">{copy.receptionDesk}</AppText>
-      {(clinics.data ?? []).map((item) => (
-        <Button
-          key={item.id}
-          label={item.name}
-          variant={activeClinicId === item.id ? 'primary' : 'secondary'}
-          onPress={() => {
-            setClinicId(item.id);
-            setBranchId(item.branches[0]?.id ?? '');
-          }}
-        />
-      ))}
-      {(clinic?.branches ?? []).map((item) => (
-        <Button
-          key={item.id}
-          label={item.name}
-          variant={activeBranchId === item.id ? 'primary' : 'secondary'}
-          onPress={() => setBranchId(item.id)}
-        />
-      ))}
-      <Card elevated>
-        <AppText variant="label">{copy.scanOrPaste}</AppText>
-        <AppText variant="muted">{copy.cameraUnavailable}</AppText>
-        <TextField label={copy.checkInCode} value={qrToken} onChangeText={setQrToken} />
-        <Button label={copy.checkInNow} loading={qr.isPending} onPress={() => qr.mutate()} />
-      </Card>
-      <Card elevated>
-        <TextField label={copy.bookingReference} value={reference} onChangeText={setReference} />
-        <TextField label={copy.patientName} value={patientName} onChangeText={setPatientName} />
-        <TextField label={copy.phoneLabel} value={phone} onChangeText={setPhone} />
-        <Button label={copy.search} loading={search.isPending} onPress={() => search.mutate()} />
-        {(search.data ?? []).map((item) => (
-          <Card key={item.id}>
-            <AppText variant="headline">{item.reference ?? item.id}</AppText>
-            <StatusBadge label={item.status} tone="primary" />
-            <AppText>{item.patientName}</AppText>
-            <AppText variant="muted">
-              {item.doctorName} · {new Date(item.startsAtUtc).toLocaleString()}
-            </AppText>
-            <Button label={copy.checkInNow} loading={checkIn.isPending} onPress={() => checkIn.mutate(item.id)} />
-          </Card>
-        ))}
-      </Card>
-      <Card>
-        <AppText variant="label">{copy.walkIn}</AppText>
-        {(doctors.data ?? []).map((item) => (
-          <Button
-            key={item.id}
-            label={item.displayName}
-            variant={walkInDoctorId === item.id ? 'primary' : 'secondary'}
-            onPress={() => setWalkInDoctorId(item.id)}
-          />
-        ))}
-        <TextField label={copy.patientName} value={walkInName} onChangeText={setWalkInName} />
-        <Button label={copy.walkIn} loading={walkIn.isPending} disabled={!walkInDoctorId} onPress={() => walkIn.mutate()} />
-        {walkIn.data ? (
-          <AppText>
-            {walkIn.data.tokenLabel} · {walkIn.data.patientDisplayName}
-          </AppText>
-        ) : null}
-        {activeClinicId && activeBranchId && walkInDoctorId ? (
-          <Button
-            label={copy.waitingRoom}
-            variant="secondary"
-            onPress={() => router.push(`/display/${activeClinicId}/${activeBranchId}/${walkInDoctorId}` as Href)}
-          />
-        ) : null}
-      </Card>
-      {canManageStaff ? (
-        <Card>
-          <AppText variant="label">{copy.clinicStaff}</AppText>
-          <TextField label={copy.staffPhone} value={staffPhone} onChangeText={setStaffPhone} />
-          <Button label={copy.assignStaff} loading={assign.isPending} onPress={() => assign.mutate()} />
-          {(staff.data ?? []).map((member) => (
-            <AppText key={member.id} variant="muted">
-              {member.phoneNumber ?? member.userId} · {member.role}
-              {member.isActive ? '' : ' (inactive)'}
-            </AppText>
+      <ScreenHeader title={copy.receptionDesk} />
+      <Animated.View entering={enter} style={{ gap: spacing.lg }}>
+        <SectionHeader title={copy.clinics} />
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
+          {(clinics.data ?? []).map((item) => (
+            <Button
+              key={item.id}
+              label={item.name}
+              variant={activeClinicId === item.id ? 'primary' : 'secondary'}
+              onPress={() => {
+                setClinicId(item.id);
+                setBranchId(item.branches[0]?.id ?? '');
+              }}
+            />
           ))}
-          <AppText variant="label">{copy.queueSettings}</AppText>
-          <TextField label={copy.tokenPrefix} value={prefix || settings.data?.tokenPrefix || 'A'} onChangeText={setPrefix} />
-          <Button label={copy.save} loading={saveSettings.isPending} onPress={() => saveSettings.mutate()} />
+        </ScrollView>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
+          {(clinic?.branches ?? []).map((item) => (
+            <Button
+              key={item.id}
+              label={item.name}
+              variant={activeBranchId === item.id ? 'primary' : 'secondary'}
+              onPress={() => setBranchId(item.id)}
+            />
+          ))}
+        </ScrollView>
+
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
+          <DashboardStatCard label={copy.todaysAppointments} value={search.data?.length ?? '—'} />
+          <DashboardStatCard label={copy.checkedInCount} value={search.data ? checkedInCount : '—'} />
+          <DashboardStatCard label={copy.walkIn} value={walkIn.data ? 1 : 0} />
+          <DashboardStatCard label={copy.doctors} value={(doctors.data ?? []).length} />
+        </View>
+
+        <Card elevated>
+          <SectionHeader title={copy.manageQueue} />
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm }}>
+            <Button label={copy.bookAppointment} variant="secondary" onPress={() => router.push('/doctors' as Href)} />
+            {activeClinicId && activeBranchId && walkInDoctorId ? (
+              <Button
+                label={copy.waitingRoom}
+                variant="secondary"
+                onPress={() => router.push(`/display/${activeClinicId}/${activeBranchId}/${walkInDoctorId}` as Href)}
+              />
+            ) : null}
+          </View>
         </Card>
-      ) : null}
-      {error ? <AppText variant="muted">{problemMessage(error, copy.receptionDesk)}</AppText> : null}
+
+        <Card elevated>
+          <SectionHeader title={copy.scanOrPaste} />
+          <AppText variant="muted">{copy.cameraUnavailable}</AppText>
+          <TextField label={copy.checkInCode} value={qrToken} onChangeText={setQrToken} />
+          <Button label={copy.checkInNow} loading={qr.isPending} onPress={() => qr.mutate()} />
+          {qr.isSuccess && qr.data ? (
+            <AppText style={{ color: theme.colors.success }}>
+              {copy.checkedIn}: {qr.data.tokenLabel} · {qr.data.displayName}
+            </AppText>
+          ) : null}
+          {qr.error ? <AppText variant="muted">{problemMessage(qr.error, copy.checkInCode)}</AppText> : null}
+        </Card>
+
+        <Card elevated>
+          <SectionHeader title={copy.todaysAppointments} />
+          <TextField label={copy.bookingReference} value={reference} onChangeText={setReference} />
+          <TextField label={copy.patientName} value={patientName} onChangeText={setPatientName} />
+          <PhoneInput label={copy.phoneLabel} value={phone} onChangeText={setPhone} />
+          <Button label={copy.search} loading={search.isPending} onPress={() => search.mutate()} />
+          {(search.data ?? []).map((item) => (
+            <PatientCard
+              key={item.id}
+              name={item.patientName}
+              meta={[
+                item.tokenLabel ? `${copy.tokenNumber} ${item.tokenLabel}` : null,
+                item.doctorName,
+                new Date(item.startsAtUtc).toLocaleString(undefined, {
+                  day: 'numeric',
+                  month: 'short',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                }),
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+              status={item.status}
+              primaryAction={{
+                label: copy.checkInNow,
+                loading: checkIn.isPending,
+                onPress: () => checkIn.mutate(item.id),
+              }}
+            />
+          ))}
+        </Card>
+
+        <Card elevated>
+          <SectionHeader title={copy.walkIn} />
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
+            {(doctors.data ?? []).map((item) => (
+              <Button
+                key={item.id}
+                label={item.displayName}
+                variant={walkInDoctorId === item.id ? 'primary' : 'secondary'}
+                onPress={() => setWalkInDoctorId(item.id)}
+              />
+            ))}
+          </ScrollView>
+          <TextField label={copy.patientName} value={walkInName} onChangeText={setWalkInName} />
+          <Button label={copy.walkIn} loading={walkIn.isPending} disabled={!walkInDoctorId} onPress={() => walkIn.mutate()} />
+          {walkIn.data ? (
+            <PatientCard
+              name={walkIn.data.patientDisplayName}
+              meta={walkIn.data.tokenLabel}
+              status={copy.walkIn}
+              statusTone="success"
+            />
+          ) : null}
+          {activeClinicId && activeBranchId && walkInDoctorId ? (
+            <Button
+              label={copy.waitingRoom}
+              variant="secondary"
+              onPress={() => router.push(`/display/${activeClinicId}/${activeBranchId}/${walkInDoctorId}` as Href)}
+            />
+          ) : null}
+        </Card>
+
+        {canManageStaff ? (
+          <Card elevated>
+            <SectionHeader title={copy.clinicStaff} />
+            <PhoneInput label={copy.staffPhone} value={staffPhone} onChangeText={setStaffPhone} />
+            <Button label={copy.assignStaff} loading={assign.isPending} onPress={() => assign.mutate()} />
+            {(staff.data ?? []).map((member) => (
+              <AppText key={member.id} variant="muted">
+                {member.phoneNumber ?? member.userId} · {member.role}
+                {member.isActive ? '' : ' (inactive)'}
+              </AppText>
+            ))}
+            <AppText variant="label">{copy.queueSettings}</AppText>
+            <TextField label={copy.tokenPrefix} value={prefix || settings.data?.tokenPrefix || 'A'} onChangeText={setPrefix} />
+            <Button label={copy.save} loading={saveSettings.isPending} onPress={() => saveSettings.mutate()} />
+          </Card>
+        ) : null}
+        {error ? <AppText variant="muted">{problemMessage(error, copy.receptionDesk)}</AppText> : null}
+      </Animated.View>
     </AuthScaffold>
   );
 }

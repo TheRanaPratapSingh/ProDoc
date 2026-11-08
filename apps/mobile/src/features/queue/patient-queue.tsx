@@ -1,9 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
-import { ResponsiveHeader } from '@/components/layout/responsive-header';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { AppointmentCard } from '@/components/ui/appointment-card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -15,13 +14,17 @@ import { problemMessage } from '@/utils/problem';
 
 export function PatientQueue() {
   const copy = useCopy();
-  const router = useRouter();
-  const queue = useQuery({ queryKey: ['queue', 'mine'], queryFn: listMyQueue, refetchInterval: 15000 });
+  const queue = useQuery({
+    queryKey: ['queue', 'mine'],
+    queryFn: listMyQueue,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  });
 
   return (
-    <AppShell active="queue">
+    <AppShell active="home">
       <AuthScaffold>
-        <ResponsiveHeader title={copy.myQueue} onBack={() => router.back()} backLabel={copy.back} />
+        <ScreenHeader title={copy.myQueue} showBack />
         {queue.isLoading ? (
           <Card>
             <CardSkeleton />

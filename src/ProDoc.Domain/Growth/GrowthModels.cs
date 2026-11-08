@@ -44,6 +44,9 @@ public static class GrowthDefaults
     public const int LoyaltyPointsPerCompletedVisit = 20;
     public const int MaxReferralRewardsPerDay = 20;
     public const int CouponMaxPercent = 50;
+
+    /// <summary>Points required to redeem ₹1 of ProDoc booking credit (configurable via growth.points_per_inr).</summary>
+    public const int PointsPerInr = 10;
 }
 
 public sealed class ReferralCode

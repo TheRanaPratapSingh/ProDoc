@@ -1,0 +1,165 @@
+namespace ProDoc.Application.Admin;
+
+public sealed record AdminClinicSummary(
+    Guid Id,
+    string Reference,
+    string? Name,
+    string Status,
+    string? PhoneNumber,
+    string? Email,
+    string? City,
+    string? State,
+    int DoctorCount,
+    int StaffCount,
+    DateTimeOffset UpdatedAtUtc);
+
+public sealed record AdminClinicMember(
+    Guid UserId,
+    Guid? DoctorId,
+    string FullName,
+    string PhoneNumber,
+    string Role,
+    string? Designation,
+    bool IsActive);
+
+public sealed record AdminClinicDetails(
+    Guid Id,
+    string Reference,
+    string? Name,
+    string? Type,
+    string Status,
+    string? PhoneNumber,
+    string? Email,
+    string? Website,
+    string? Description,
+    string? RegistrationNumber,
+    Guid OwnerUserId,
+    IReadOnlyList<AdminClinicBranch> Branches,
+    IReadOnlyList<AdminClinicMember> Doctors,
+    IReadOnlyList<AdminClinicMember> Staff,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset UpdatedAtUtc);
+
+public sealed record AdminClinicBranch(
+    Guid Id,
+    string Name,
+    string AddressLine,
+    string? AddressLine2,
+    string? Landmark,
+    string? Locality,
+    string City,
+    string? District,
+    string State,
+    string PostalCode,
+    string Country,
+    decimal? Latitude,
+    decimal? Longitude,
+    string? GooglePlaceId,
+    string? FormattedAddress,
+    string? PhoneNumber,
+    bool IsPrimary,
+    bool IsActive,
+    bool LocationVerified);
+
+public sealed record CreateAdminClinicCommand(
+    Guid ActorUserId,
+    string Name,
+    string Type,
+    string PhoneNumber,
+    string? Email,
+    string? Website,
+    string? Description,
+    string? RegistrationNumber,
+    string? BranchName,
+    string AddressLine,
+    string? AddressLine2,
+    string? Landmark,
+    string? Locality,
+    string City,
+    string? District,
+    string State,
+    string PostalCode,
+    string? Country,
+    decimal? Latitude,
+    decimal? Longitude,
+    string? GooglePlaceId,
+    string? BranchPhoneNumber,
+    string? IpAddress,
+    string? UserAgent);
+
+public sealed record UpdateAdminClinicBranchCommand(
+    Guid ActorUserId,
+    Guid ClinicId,
+    Guid BranchId,
+    string Name,
+    string AddressLine,
+    string? AddressLine2,
+    string? Landmark,
+    string? Locality,
+    string City,
+    string? District,
+    string State,
+    string PostalCode,
+    string? Country,
+    decimal? Latitude,
+    decimal? Longitude,
+    string? GooglePlaceId,
+    string? PhoneNumber,
+    bool IsPrimary,
+    string? IpAddress,
+    string? UserAgent);
+
+public sealed record UpdateDoctorPracticeLocationCommand(
+    Guid ActorUserId,
+    Guid DoctorId,
+    Guid AffiliationId,
+    bool ClearOverride,
+    string? AddressLine,
+    string? AddressLine2,
+    string? Landmark,
+    string? Locality,
+    string? City,
+    string? District,
+    string? State,
+    string? PostalCode,
+    string? Country,
+    decimal? Latitude,
+    decimal? Longitude,
+    string? GooglePlaceId,
+    string? IpAddress,
+    string? UserAgent);
+
+public sealed record UpdateAdminClinicCommand(
+    Guid ActorUserId,
+    Guid ClinicId,
+    string Name,
+    string Type,
+    string PhoneNumber,
+    string? Email,
+    string? Website,
+    string? Description,
+    string? RegistrationNumber,
+    string? IpAddress,
+    string? UserAgent);
+
+public sealed record AdminUserDetails(
+    Guid UserId,
+    string PhoneNumber,
+    string? FullName,
+    string? Email,
+    IReadOnlyList<string> Roles,
+    DateTimeOffset CreatedAtUtc,
+    DateTimeOffset? SuspendedAtUtc,
+    DateTimeOffset? DeletionRequestedAtUtc,
+    Guid? DoctorId,
+    string? DoctorStatus,
+    string? PrimarySpecialization,
+    string? Qualifications,
+    string? RegistrationNumber,
+    int? YearsOfExperience,
+    IReadOnlyList<AdminUserClinicLink> Clinics,
+    IReadOnlyList<AdminUserDoctorLink> AssignedDoctors);
+
+public sealed record AdminUserClinicLink(Guid ClinicId, string ClinicName, string Role, bool IsActive);
+
+public sealed record AdminUserDoctorLink(Guid DoctorId, string DoctorName, Guid ClinicId, string ClinicName);

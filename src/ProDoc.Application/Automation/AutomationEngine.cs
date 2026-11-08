@@ -2,7 +2,9 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using ProDoc.Application.Abstractions;
+using ProDoc.Application.Clinical;
 using ProDoc.Application.Mobile;
+using ProDoc.Application.Notifications;
 using ProDoc.Domain.Appointments;
 using ProDoc.Domain.Automation;
 using ProDoc.Domain.Common;
@@ -16,6 +18,8 @@ public sealed class AutomationEngine(
     IAutomationMessenger messenger,
     IMobileStore mobileStore,
     IPushNotificationSender push,
+    NotificationService notifications,
+    FollowUpService followUps,
     IClock clock,
     ILogger<AutomationEngine> logger)
 {
@@ -25,14 +29,27 @@ public sealed class AutomationEngine(
         "eq", "neq", "contains", "exists", "gte", "lte"
     };
 
+    private static readonly HashSet<string> PartyFanOutEvents = new(StringComparer.OrdinalIgnoreCase)
+    {
+        AutomationTriggerTypes.AppointmentCreated,
+        AutomationTriggerTypes.AppointmentConfirmed,
+        AutomationTriggerTypes.AppointmentCancelled,
+        AutomationTriggerTypes.AppointmentRescheduled,
+        AutomationTriggerTypes.AppointmentReminderDue,
+        AutomationTriggerTypes.PatientCheckedIn
+    };
+
     public async Task ProcessOutboxEventAsync(AutomationOutboxEvent item, CancellationToken cancellationToken)
     {
-        if (item.EventType == AutomationTriggerTypes.AppointmentCancelled && item.SubjectId is Guid cancelledId)
+        if (item.EventType is AutomationTriggerTypes.AppointmentCancelled or AutomationTriggerTypes.AppointmentRescheduled
+            && item.SubjectId is Guid subjectId)
         {
             await store.CancelPendingRemindersForSubjectAsync(
-                cancelledId,
+                subjectId,
                 AutomationTriggerTypes.AppointmentReminderDue,
-                "Appointment cancelled",
+                item.EventType == AutomationTriggerTypes.AppointmentCancelled
+                    ? "Appointment cancelled"
+                    : "Appointment rescheduled",
                 clock.UtcNow,
                 cancellationToken);
         }
@@ -48,6 +65,27 @@ public sealed class AutomationEngine(
         }
 
         using var payloadDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(item.PayloadJson) ? "{}" : item.PayloadJson);
+
+        if (PartyFanOutEvents.Contains(item.EventType))
+        {
+            await FanOutAppointmentAsync(item, payloadDoc.RootElement, cancellationToken);
+        }
+
+        if (item.EventType is AutomationTriggerTypes.PaymentCompleted or AutomationTriggerTypes.PaymentFailed)
+        {
+            await FanOutPaymentAsync(item, payloadDoc.RootElement, cancellationToken);
+        }
+
+        if (item.EventType is AutomationTriggerTypes.AppointmentConfirmed or AutomationTriggerTypes.AppointmentRescheduled)
+        {
+            await ScheduleRelativeRemindersAsync(item, payloadDoc.RootElement, cancellationToken);
+        }
+
+        if (item.EventType == AutomationTriggerTypes.FollowUpReminderDue)
+        {
+            await DeliverFollowUpReminderAsync(item, payloadDoc.RootElement, cancellationToken);
+        }
+
         var workflows = await store.ListEnabledForTriggerAsync(item.EventType, item.OrganizationId, cancellationToken);
         // Also include platform-wide workflows (OrganizationId null).
         if (item.OrganizationId is not null)
@@ -63,6 +101,133 @@ public sealed class AutomationEngine(
 
         item.MarkCompleted(clock.UtcNow);
         await store.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task FanOutAppointmentAsync(
+        AutomationOutboxEvent item,
+        JsonElement payload,
+        CancellationToken cancellationToken)
+    {
+        var context = BuildPartyContext(item, payload);
+        if (context is null)
+        {
+            return;
+        }
+
+        await notifications.NotifyAppointmentPartiesAsync(item.EventType, context, cancellationToken);
+    }
+
+    private async Task FanOutPaymentAsync(
+        AutomationOutboxEvent item,
+        JsonElement payload,
+        CancellationToken cancellationToken)
+    {
+        var userId = item.UserId ?? ReadGuid(payload, "accountUserId") ?? ReadGuid(payload, "userId");
+        if (userId is null || userId == Guid.Empty)
+        {
+            return;
+        }
+
+        var paid = item.EventType == AutomationTriggerTypes.PaymentCompleted;
+        await notifications.NotifyUsersAsync(
+            [userId.Value],
+            paid ? NotificationKinds.PaymentPaid : NotificationKinds.PaymentFailed,
+            item.SubjectId,
+            paid ? "Payment Received" : "Payment Failed",
+            paid
+                ? "Your payment was received successfully. Open ProDoc for the receipt."
+                : "We could not complete your payment. Please try again in ProDoc.",
+            essential: true,
+            cancellationToken);
+    }
+
+    private AppointmentPartyNotificationContext? BuildPartyContext(AutomationOutboxEvent item, JsonElement payload)
+    {
+        var appointmentId = item.SubjectId ?? ReadGuid(payload, "appointmentId") ?? Guid.Empty;
+        var patientUserId = item.UserId ?? ReadGuid(payload, "accountUserId") ?? ReadGuid(payload, "userId") ?? Guid.Empty;
+        var doctorId = ReadGuid(payload, "doctorId") ?? Guid.Empty;
+        var clinicId = ReadGuid(payload, "clinicId") ?? Guid.Empty;
+        var branchId = ReadGuid(payload, "branchId") ?? Guid.Empty;
+        if (appointmentId == Guid.Empty || doctorId == Guid.Empty || clinicId == Guid.Empty)
+        {
+            return null;
+        }
+
+        var starts = ReadDate(payload, "startsAtUtc") ?? clock.UtcNow;
+        var ends = ReadDate(payload, "endsAtUtc") ?? starts.AddMinutes(15);
+        return new AppointmentPartyNotificationContext(
+            appointmentId,
+            patientUserId,
+            doctorId,
+            clinicId,
+            branchId,
+            ReadString(payload, "patientName") ?? "Patient",
+            ReadString(payload, "doctorName") ?? "Doctor",
+            ReadString(payload, "clinicName") ?? "Clinic",
+            ReadString(payload, "reference"),
+            ReadString(payload, "tokenLabel"),
+            starts,
+            ends,
+            ReadString(payload, "timeZoneId") ?? "Asia/Kolkata",
+            ReadString(payload, "status") ?? string.Empty,
+            ReadString(payload, "bookingMode") ?? "TimedSlots",
+            ReadDate(payload, "previousStartsAtUtc"),
+            ReadDate(payload, "previousEndsAtUtc"),
+            ReadString(payload, "cancellationReason") ?? ReadString(payload, "decisionNote"));
+    }
+
+    private async Task DeliverFollowUpReminderAsync(
+        AutomationOutboxEvent item,
+        JsonElement payload,
+        CancellationToken cancellationToken)
+    {
+        var followUpId = item.SubjectId ?? ReadGuid(payload, "followUpId");
+        if (followUpId is null)
+        {
+            item.Cancel("Missing follow-up subject", clock.UtcNow);
+            await store.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
+        var label = ReadString(payload, "reminderLabel") ?? "3d";
+        await followUps.DeliverReminderAsync(followUpId.Value, label, item.IdempotencyKey, cancellationToken);
+    }
+
+    private async Task ScheduleRelativeRemindersAsync(
+        AutomationOutboxEvent item,
+        JsonElement payload,
+        CancellationToken cancellationToken)
+    {
+        var starts = ReadDate(payload, "startsAtUtc");
+        if (starts is null || item.SubjectId is null)
+        {
+            return;
+        }
+
+        var offsets = new[]
+        {
+            (Hours: 24, Label: "24h"),
+            (Hours: 2, Label: "2h")
+        };
+
+        foreach (var offset in offsets)
+        {
+            var availableAt = starts.Value.AddHours(-offset.Hours);
+            if (availableAt <= clock.UtcNow.AddMinutes(1))
+            {
+                continue;
+            }
+
+            await bus.PublishAsync(
+                AutomationTriggerTypes.AppointmentReminderDue,
+                JsonSerializer.Deserialize<object>(item.PayloadJson) ?? new { },
+                $"{item.IdempotencyKey}:reminder:{offset.Label}",
+                cancellationToken,
+                item.OrganizationId,
+                item.SubjectId,
+                item.UserId,
+                availableAt);
+        }
     }
 
     private async Task ExecuteWorkflowAsync(
@@ -135,6 +300,23 @@ public sealed class AutomationEngine(
         if (!AutomationActionTypes.Catalog.Contains(action.Type, StringComparer.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"Action '{action.Type}' is not allowlisted.");
+        }
+
+        // Lifecycle party/payment notifications are handled by NotificationService fan-out.
+        if ((PartyFanOutEvents.Contains(item.EventType)
+                || item.EventType is AutomationTriggerTypes.PaymentCompleted or AutomationTriggerTypes.PaymentFailed)
+            && action.Type is AutomationActionTypes.SendInApp or AutomationActionTypes.SendPush)
+        {
+            return "handled_by_notification_service";
+        }
+
+        // Relative reminders are scheduled centrally against startsAtUtc.
+        if (action.Type.Equals(AutomationActionTypes.ScheduleReminder, StringComparison.OrdinalIgnoreCase)
+            && item.EventType is AutomationTriggerTypes.AppointmentConfirmed
+                or AutomationTriggerTypes.AppointmentCreated
+                or AutomationTriggerTypes.AppointmentRescheduled)
+        {
+            return "handled_by_relative_reminder_scheduler";
         }
 
         var title = Render(action.TitleTemplate ?? workflow.Name, payload);
@@ -461,12 +643,39 @@ public sealed class AutomationEngine(
             return null;
         }
 
-        return value.ValueKind == JsonValueKind.String && Guid.TryParse(value.GetString(), out var id) ? id : null;
+        return value.ValueKind == JsonValueKind.String && Guid.TryParse(value.GetString(), out var id)
+            ? id
+            : value.ValueKind == JsonValueKind.Null
+                ? null
+                : Guid.TryParse(value.ToString(), out var parsed) ? parsed : null;
+    }
+
+    private static DateTimeOffset? ReadDate(JsonElement payload, string name)
+    {
+        if (!TryGetIgnoreCase(payload, name, out var value) || value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        return DateTimeOffset.TryParse(value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static string? ReadString(JsonElement payload, string name)
+    {
+        if (!TryGetIgnoreCase(payload, name, out var value))
+        {
+            return null;
+        }
+
+        return value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
     }
 
     private static bool IsEssential(string eventType) =>
         eventType is AutomationTriggerTypes.AppointmentConfirmed
             or AutomationTriggerTypes.AppointmentCancelled
+            or AutomationTriggerTypes.AppointmentRescheduled
             or AutomationTriggerTypes.PaymentFailed
             or AutomationTriggerTypes.PaymentCompleted
             or AutomationTriggerTypes.SupportTicketStatusChanged;

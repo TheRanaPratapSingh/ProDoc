@@ -16,7 +16,7 @@ public sealed class ConcurrencyFlowTests(ProDocApiFactory factory)
         var doctor = await SignInAsync("9000000121");
         var patientA = await SignInAsync("9000000122");
         var patientB = await SignInAsync("9000000123");
-        var admin = await SignInAsync("9000000001");
+        var admin = await SignInAsync("9000000001", purpose: "admin");
         await SendAsync(HttpMethod.Put, "/api/v1/account/profile", patientA.AccessToken, JsonContent.Create(new { fullName = "Concur A", preferredLanguage = "en" }));
         await SendAsync(HttpMethod.Put, "/api/v1/account/profile", patientB.AccessToken, JsonContent.Create(new { fullName = "Concur B", preferredLanguage = "en" }));
 
@@ -41,6 +41,8 @@ public sealed class ConcurrencyFlowTests(ProDocApiFactory factory)
 
     private async Task<Guid> PublishScheduleAsync(SessionBody doctor, SessionBody admin, Guid specializationId)
     {
+        await ProviderSeed.EnsureDoctorRoleAsync(_client, doctor.AccessToken, admin.AccessToken);
+        doctor = await SignInAsync("9000000121");
         await SendAsync(HttpMethod.Put, "/api/v1/doctors/me/basics", doctor.AccessToken, JsonContent.Create(new
         {
             firstName = "Concurrent",
@@ -84,8 +86,8 @@ public sealed class ConcurrencyFlowTests(ProDocApiFactory factory)
         var doctorId = submitted.GetProperty("id").GetGuid();
         await SendAsync(HttpMethod.Post, $"/api/v1/admin/verifications/doctors/{doctorId}", admin.AccessToken, JsonContent.Create(new { decision = "Approve" }));
 
-        var clinic = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/clinics", doctor.AccessToken));
-        var clinicId = clinic.GetProperty("id").GetGuid();
+        var ownerUserId = await ProviderSeed.GetUserIdAsync(_client, doctor.AccessToken);
+        var clinicId = await ProviderSeed.CreateClinicOwnedByAsync(_client, admin.AccessToken, ownerUserId);
         await SendAsync(HttpMethod.Put, $"/api/v1/clinics/{clinicId}", doctor.AccessToken, JsonContent.Create(new
         {
             name = "Concurrency Clinic",
@@ -139,9 +141,9 @@ public sealed class ConcurrencyFlowTests(ProDocApiFactory factory)
         return body.GetProperty("slots").EnumerateArray().Select(slot => slot.GetProperty("start").GetString()!).ToArray();
     }
 
-    private async Task<SessionBody> SignInAsync(string phone)
+    private async Task<SessionBody> SignInAsync(string phone, string? purpose = null)
     {
-        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone });
+        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone, purpose });
         var otpBody = await otpResponse.Content.ReadAsStringAsync();
         Assert.True(otpResponse.IsSuccessStatusCode, otpBody);
         var otp = JsonSerializer.Deserialize<OtpBody>(otpBody, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -149,7 +151,8 @@ public sealed class ConcurrencyFlowTests(ProDocApiFactory factory)
         {
             phoneNumber = phone,
             code = otp!.DevelopmentCode,
-            deviceName = "integration-test"
+            deviceName = "integration-test",
+            purpose
         });
         var verifyBody = await verifyResponse.Content.ReadAsStringAsync();
         Assert.True(verifyResponse.IsSuccessStatusCode, verifyBody);

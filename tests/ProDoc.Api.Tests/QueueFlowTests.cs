@@ -15,7 +15,7 @@ public sealed class QueueFlowTests(ProDocApiFactory factory)
     {
         var doctor = await SignInAsync("9000000041");
         var patient = await SignInAsync("9000000042");
-        var admin = await SignInAsync("9000000001");
+        var admin = await SignInAsync("9000000001", purpose: "admin");
         await SendAsync(HttpMethod.Put, "/api/v1/account/profile", patient.AccessToken, JsonContent.Create(new { fullName = "Riya Nair", preferredLanguage = "en" }));
         var specializations = await SendAsync(HttpMethod.Get, "/api/v1/specializations", doctor.AccessToken);
         var cardiology = (await specializations.Content.ReadFromJsonAsync<SpecializationBody[]>())!.Single(item => item.Code == "cardiology");
@@ -82,6 +82,8 @@ public sealed class QueueFlowTests(ProDocApiFactory factory)
 
     private async Task<(Guid ScheduleId, Guid ClinicId, Guid BranchId, Guid DoctorId)> PublishAsync(SessionBody doctor, SessionBody admin, Guid specializationId)
     {
+        await ProviderSeed.EnsureDoctorRoleAsync(_client, doctor.AccessToken, admin.AccessToken);
+        doctor = await SignInAsync("9000000041");
         await SendAsync(HttpMethod.Put, "/api/v1/doctors/me/basics", doctor.AccessToken, JsonContent.Create(new
         {
             firstName = "Anika",
@@ -125,8 +127,8 @@ public sealed class QueueFlowTests(ProDocApiFactory factory)
         var doctorId = submitted.GetProperty("id").GetGuid();
         await SendAsync(HttpMethod.Post, $"/api/v1/admin/verifications/doctors/{doctorId}", admin.AccessToken, JsonContent.Create(new { decision = "Approve" }));
 
-        var clinic = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/clinics", doctor.AccessToken));
-        var clinicId = clinic.GetProperty("id").GetGuid();
+        var ownerUserId = await ProviderSeed.GetUserIdAsync(_client, doctor.AccessToken);
+        var clinicId = await ProviderSeed.CreateClinicOwnedByAsync(_client, admin.AccessToken, ownerUserId);
         await SendAsync(HttpMethod.Put, $"/api/v1/clinics/{clinicId}", doctor.AccessToken, JsonContent.Create(new
         {
             name = "Menon Clinic",
@@ -157,12 +159,18 @@ public sealed class QueueFlowTests(ProDocApiFactory factory)
             slotDurationMinutes = 20
         })));
         var scheduleId = created.GetProperty("id").GetGuid();
+        var rowVersion = created.GetProperty("rowVersion").GetString();
         var days = Enum.GetNames<DayOfWeek>();
-        await SendAsync(HttpMethod.Put, $"/api/v1/schedules/{scheduleId}/hours", doctor.AccessToken, JsonContent.Create(new
+        var withHours = await ReadAsync(await SendAsync(HttpMethod.Put, $"/api/v1/schedules/{scheduleId}/hours", doctor.AccessToken, JsonContent.Create(new
         {
+            expectedRowVersion = rowVersion,
             periods = days.Select(day => new { day, startsAt = "09:00", endsAt = "12:00" })
-        }));
-        await SendAsync(HttpMethod.Post, $"/api/v1/schedules/{scheduleId}/publication", doctor.AccessToken, JsonContent.Create(new { isPublished = true }));
+        })));
+        await ReadAsync(await SendAsync(HttpMethod.Post, $"/api/v1/schedules/{scheduleId}/publication", doctor.AccessToken, JsonContent.Create(new
+        {
+            isPublished = true,
+            expectedRowVersion = withHours.GetProperty("rowVersion").GetString()
+        })));
         return (scheduleId, clinicId, branchId, doctorId);
     }
 
@@ -180,13 +188,19 @@ public sealed class QueueFlowTests(ProDocApiFactory factory)
         return body.GetProperty("slots").EnumerateArray().Select(slot => slot.GetProperty("start").GetString()!).ToArray();
     }
 
-    private async Task<SessionBody> SignInAsync(string phone)
+    private async Task<SessionBody> SignInAsync(string phone, string? purpose = null)
     {
-        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone });
+        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone, purpose });
         var otpBody = await otpResponse.Content.ReadAsStringAsync();
         Assert.True(otpResponse.IsSuccessStatusCode, otpBody);
         var otp = JsonSerializer.Deserialize<OtpBody>(otpBody, new JsonSerializerOptions(JsonSerializerDefaults.Web));
-        var verifyResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/verify", new { phoneNumber = phone, code = otp!.DevelopmentCode, deviceName = "integration-test" });
+        var verifyResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/verify", new
+        {
+            phoneNumber = phone,
+            code = otp!.DevelopmentCode,
+            deviceName = "integration-test",
+            purpose
+        });
         var verifyBody = await verifyResponse.Content.ReadAsStringAsync();
         Assert.True(verifyResponse.IsSuccessStatusCode, verifyBody);
         return JsonSerializer.Deserialize<SessionBody>(verifyBody, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;

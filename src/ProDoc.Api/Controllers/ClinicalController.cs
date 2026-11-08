@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ProDoc.Api.Auth;
 using ProDoc.Api.Contracts;
+using ProDoc.Api.Errors;
 using ProDoc.Application.Clinical;
 using ProDoc.Application.Providers;
 using ProDoc.Domain.Identity;
@@ -89,9 +90,22 @@ public sealed class ClinicalController(MedicalService medical) : ControllerBase
     public Task<IReadOnlyList<MedicalRecordSummary>> MyRecords(CancellationToken cancellationToken) =>
         medical.ListMyRecordsAsync(User.GetUserId(), cancellationToken);
 
+    /// <summary>
+    /// Patients read their own chart (<see cref="PermissionCodes.RecordsReadSelf"/>).
+    /// Treating doctors read via care-relationship checks inside the service
+    /// (<see cref="PermissionCodes.AppointmentsManageAssigned"/>).
+    /// </summary>
     [HttpGet("medical-records/{recordId:guid}")]
-    public Task<MedicalRecordDetails> GetRecord(Guid recordId, CancellationToken cancellationToken) =>
-        medical.GetRecordAsync(User.GetUserId(), recordId, Meta(), cancellationToken);
+    public async Task<ActionResult<MedicalRecordDetails>> GetRecord(Guid recordId, CancellationToken cancellationToken)
+    {
+        if (!HasRecordsReadSelf() && !HasAppointmentsManageAssigned())
+        {
+            return Forbid();
+        }
+
+        var result = await medical.GetRecordAsync(User.GetUserId(), recordId, Meta(), cancellationToken);
+        return result.ToActionResult(this);
+    }
 
     [HasPermission(PermissionCodes.AppointmentsManageAssigned)]
     [HttpPost("medical-records/{recordId:guid}/allergies")]
@@ -173,4 +187,10 @@ public sealed class ClinicalController(MedicalService medical) : ControllerBase
         medical.AddMedicineCatalogAsync(User.GetUserId(), request.Name, request.Form, request.StrengthHint, cancellationToken);
 
     private RequestMetadata Meta() => new(ClientContext.IpAddress(HttpContext), ClientContext.UserAgent(HttpContext));
+
+    private bool HasRecordsReadSelf() =>
+        User.Claims.Any(claim => claim.Type == "perm" && claim.Value == PermissionCodes.RecordsReadSelf);
+
+    private bool HasAppointmentsManageAssigned() =>
+        User.Claims.Any(claim => claim.Type == "perm" && claim.Value == PermissionCodes.AppointmentsManageAssigned);
 }

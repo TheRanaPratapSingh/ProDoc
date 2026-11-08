@@ -20,6 +20,9 @@ export type DoctorProfile = {
   id: string;
   reference: string;
   status: string;
+  verificationBadge: string;
+  profileCompletionPercent: number;
+  photoDocumentId: string | null;
   isPubliclyBookable: boolean;
   isAcceptingPatients: boolean;
   firstName: string | null;
@@ -31,7 +34,7 @@ export type DoctorProfile = {
   preferredLanguage: string;
   displayName: string | null;
   biography: string | null;
-  yearsOfExperience: number | null;
+  yearsOfExperience: number;
   languages: string[];
   expertise: string[];
   qualifications: { id: string; name: string; institution: string | null; graduationYear: number }[];
@@ -65,11 +68,22 @@ export type ClinicProfile = {
     id: string;
     name: string;
     addressLine: string;
+    addressLine2?: string | null;
+    landmark?: string | null;
+    locality?: string | null;
     city: string;
+    district?: string | null;
     state: string;
     postalCode: string;
+    country?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    googlePlaceId?: string | null;
+    formattedAddress?: string | null;
+    compactAddress?: string | null;
     isPrimary: boolean;
     isActive: boolean;
+    locationVerified?: boolean;
   }[];
   documents: ProviderDocument[];
   rejectionReason: string | null;
@@ -81,6 +95,21 @@ export type DoctorCard = {
   yearsOfExperience: number;
   primarySpecialization: string;
   photoDocumentId: string | null;
+  clinicName?: string | null;
+  city?: string | null;
+  qualification?: string | null;
+  isVerified?: boolean;
+};
+
+export type ClinicCard = {
+  id: string;
+  name: string;
+  type: string;
+  city: string;
+  logoDocumentId: string | null;
+  branchName?: string | null;
+  location?: string | null;
+  associatedDoctors?: string[] | null;
 };
 
 export type ReviewItem = {
@@ -203,8 +232,17 @@ export async function linkClinic(clinicId: string, kind: string) {
   return response.data;
 }
 
-export async function searchDoctors(query: string) {
-  const response = await withAuthRetry(() => api.get<DoctorCard[]>('/api/v1/doctors', { params: { query } }));
+export async function searchDoctors(query: string, signal?: AbortSignal) {
+  const response = await withAuthRetry(() =>
+    api.get<DoctorCard[]>('/api/v1/doctors', { params: { query }, signal }),
+  );
+  return response.data;
+}
+
+export async function searchClinics(query: string, signal?: AbortSignal) {
+  const response = await withAuthRetry(() =>
+    api.get<ClinicCard[]>('/api/v1/clinics', { params: { query }, signal }),
+  );
   return response.data;
 }
 
@@ -232,9 +270,17 @@ export async function saveClinic(clinicId: string, body: {
 export async function addBranch(clinicId: string, body: {
   name: string;
   addressLine: string;
+  addressLine2?: string | null;
+  landmark?: string | null;
+  locality?: string | null;
   city: string;
+  district?: string | null;
   state: string;
   postalCode: string;
+  country?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  googlePlaceId?: string | null;
   isPrimary: boolean;
 }) {
   const response = await withAuthRetry(() => api.post<ClinicProfile>(`/api/v1/clinics/${clinicId}/branches`, body));
@@ -270,18 +316,35 @@ export type DiscoveryPlace = {
   displayName: string;
   primarySpecialization: string;
   yearsOfExperience: number;
+  photoDocumentId?: string | null;
   clinicId: string | null;
   clinicName: string | null;
   branchId: string | null;
   branchName: string | null;
   addressLine: string | null;
+  addressLine2?: string | null;
+  landmark?: string | null;
+  locality?: string | null;
   city: string | null;
+  district?: string | null;
+  state?: string | null;
+  postalCode: string | null;
+  country?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  googlePlaceId?: string | null;
+  formattedAddress?: string | null;
+  compactAddress?: string | null;
   consultationFee: number;
   slotDurationMinutes: number;
   distanceKm: number | null;
-  postalCode: string | null;
   phoneNumber: string | null;
+  qualification?: string | null;
+  registrationNumber?: string | null;
+  registrationCouncil?: string | null;
+  mapsUrl?: string | null;
   directionsUrl: string | null;
+  locationVerified?: boolean;
 };
 
 export type DiscoveredDoctor = {
@@ -297,6 +360,7 @@ export type DiscoveredDoctor = {
   languages: string[];
   registrationCouncil: string | null;
   registrationState: string | null;
+  photoDocumentId?: string | null;
   practices: DiscoveryPlace[];
 };
 
@@ -305,21 +369,37 @@ export type DiscoveredClinic = {
   name: string;
   type: string;
   description: string | null;
+  logoDocumentId?: string | null;
   facilities: string[];
   specializations: string[];
   branches: {
     id: string;
     name: string;
     addressLine: string;
+    addressLine2?: string | null;
+    landmark?: string | null;
+    locality?: string | null;
     city: string;
+    district?: string | null;
+    state?: string | null;
     postalCode: string;
+    country?: string | null;
     phoneNumber: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    googlePlaceId?: string | null;
+    formattedAddress?: string | null;
+    compactAddress?: string | null;
     distanceKm: number | null;
     doctorCount: number;
+    mapsUrl?: string | null;
     directionsUrl: string | null;
+    locationVerified?: boolean;
     openToday: boolean;
   }[];
 };
+
+export type ScheduleBookingMode = 'TimedSlots' | 'HourlyQueue';
 
 export type ScheduleDetails = {
   id: string;
@@ -331,19 +411,40 @@ export type ScheduleDetails = {
   slotDurationMinutes: number;
   bufferMinutes: number;
   maxPatients: number | null;
+  bookingMode: ScheduleBookingMode;
   effectiveFrom: string | null;
   effectiveTo: string | null;
   timeZoneId: string;
   isPublished: boolean;
   requiresApproval: boolean;
+  rowVersion: string;
   hours: { id: string; day: number; startsAt: string; endsAt: string }[];
   breaks: { id: string; day: number; startsAt: string; endsAt: string }[];
   closures: { id: string; date: string; reason: string | null }[];
+  extras: { id: string; date: string; startsAt: string; endsAt: string }[];
+};
+
+export type ScheduleSlot = {
+  start: string;
+  end: string;
+  available?: boolean;
+  bookedCount?: number | null;
+  capacity?: number | null;
+  remaining?: number | null;
+  tokenPrefix?: string | null;
+};
+
+export type SlotAvailability = {
+  scheduleId: string;
+  date: string;
+  bookingMode: ScheduleBookingMode;
+  slots: ScheduleSlot[];
 };
 
 export type DiscoveryFilters = {
   query?: string;
   specializationId?: string;
+  clinicId?: string;
   city?: string;
   latitude?: string;
   longitude?: string;
@@ -353,10 +454,14 @@ export type DiscoveryFilters = {
   availability?: string;
   sort?: string;
   postalCode?: string;
+  page?: number;
+  pageSize?: number;
 };
 
-export async function discoverPlaces(filters: DiscoveryFilters) {
-  const response = await withAuthRetry(() => api.get<DiscoveryPlace[]>('/api/v1/search/doctors', { params: filters }));
+export async function discoverPlaces(filters: DiscoveryFilters, signal?: AbortSignal) {
+  const response = await withAuthRetry(() =>
+    api.get<DiscoveryPlace[]>('/api/v1/search/doctors', { params: filters, signal }),
+  );
   return response.data;
 }
 
@@ -380,6 +485,11 @@ export async function getAvailability(doctorId: string, from: string, to: string
   return response.data;
 }
 
+export async function listFavourites() {
+  const response = await withAuthRetry(() => api.get<DiscoveredDoctor[]>('/api/v1/favourites'));
+  return response.data;
+}
+
 export async function addFavourite(doctorId: string) {
   await withAuthRetry(() => api.put(`/api/v1/favourites/${doctorId}`));
 }
@@ -393,11 +503,13 @@ export async function getDiscoveredDoctor(doctorId: string) {
   return response.data;
 }
 
-export async function getSlots(scheduleId: string, date: string) {
+export async function getSlots(scheduleId: string, date: string, exceptAppointmentId?: string | null) {
   const response = await withAuthRetry(() =>
-    api.get<{ slots: { start: string; end: string }[] }>(`/api/v1/schedules/${scheduleId}/slots`, { params: { date } }),
+    api.get<SlotAvailability>(`/api/v1/schedules/${scheduleId}/slots`, {
+      params: { date, exceptAppointmentId: exceptAppointmentId || undefined },
+    }),
   );
-  return response.data.slots;
+  return response.data;
 }
 
 export async function listMySchedules() {
@@ -406,6 +518,7 @@ export async function listMySchedules() {
 }
 
 export async function createSchedule(body: {
+  doctorId?: string;
   clinicId?: string;
   branchId?: string;
   consultationFee: number;
@@ -416,40 +529,150 @@ export async function createSchedule(body: {
   return response.data;
 }
 
-export async function saveScheduleHours(scheduleId: string, periods: { day: string; startsAt: string; endsAt: string }[]) {
-  const response = await withAuthRetry(() => api.put<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/hours`, { periods }));
+export async function saveScheduleHours(
+  scheduleId: string,
+  periods: { day: string; startsAt: string; endsAt: string }[],
+  expectedRowVersion?: string,
+) {
+  const response = await withAuthRetry(() =>
+    api.put<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/hours`, { periods, expectedRowVersion }),
+  );
   return response.data;
 }
 
-export async function saveScheduleBreaks(scheduleId: string, periods: { day: string; startsAt: string; endsAt: string }[]) {
-  const response = await withAuthRetry(() => api.put<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/breaks`, { periods }));
+export async function saveScheduleBreaks(
+  scheduleId: string,
+  periods: { day: string; startsAt: string; endsAt: string }[],
+  expectedRowVersion?: string,
+) {
+  const response = await withAuthRetry(() =>
+    api.put<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/breaks`, { periods, expectedRowVersion }),
+  );
   return response.data;
 }
 
-export async function addScheduleClosure(scheduleId: string, date: string, reason: string) {
-  const response = await withAuthRetry(() => api.post<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/closures`, { date, reason }));
+export async function addScheduleClosure(
+  scheduleId: string,
+  date: string,
+  reason: string,
+  expectedRowVersion?: string,
+) {
+  const response = await withAuthRetry(() =>
+    api.post<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/closures`, { date, reason, expectedRowVersion }),
+  );
   return response.data;
 }
 
-export async function saveScheduleTerms(schedule: ScheduleDetails, requiresApproval: boolean) {
+export async function removeScheduleClosure(scheduleId: string, closureId: string, expectedRowVersion?: string) {
+  const response = await withAuthRetry(() =>
+    api.delete<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/closures/${closureId}`, {
+      params: expectedRowVersion ? { expectedRowVersion } : undefined,
+    }),
+  );
+  return response.data;
+}
+
+export async function saveScheduleTerms(
+  schedule: ScheduleDetails,
+  requiresApproval: boolean,
+  options?: { bookingMode?: ScheduleBookingMode; confirmBookingModeChange?: boolean },
+) {
   const response = await withAuthRetry(() =>
     api.put<ScheduleDetails>(`/api/v1/schedules/${schedule.id}`, {
       consultationFee: schedule.consultationFee,
       slotDurationMinutes: schedule.slotDurationMinutes,
       bufferMinutes: schedule.bufferMinutes,
       maxPatients: schedule.maxPatients,
+      bookingMode: options?.bookingMode ?? schedule.bookingMode,
+      confirmBookingModeChange: options?.confirmBookingModeChange ?? false,
       effectiveFrom: schedule.effectiveFrom,
       effectiveTo: schedule.effectiveTo,
       timeZoneId: schedule.timeZoneId,
       requiresApproval,
+      expectedRowVersion: schedule.rowVersion || undefined,
     }),
   );
   return response.data;
 }
 
-export async function setSchedulePublished(scheduleId: string, isPublished: boolean) {
+export async function setSchedulePublished(
+  scheduleId: string,
+  isPublished: boolean,
+  expectedRowVersion?: string,
+) {
   const response = await withAuthRetry(() =>
-    api.post<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/publication`, { isPublished }),
+    api.post<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/publication`, {
+      isPublished,
+      expectedRowVersion,
+    }),
+  );
+  return response.data;
+}
+
+export async function addScheduleExtra(
+  scheduleId: string,
+  date: string,
+  startsAt: string,
+  endsAt: string,
+  expectedRowVersion?: string,
+) {
+  const response = await withAuthRetry(() =>
+    api.post<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/extras`, {
+      date,
+      startsAt,
+      endsAt,
+      expectedRowVersion,
+    }),
+  );
+  return response.data;
+}
+
+export async function replaceDayOverride(
+  scheduleId: string,
+  body: {
+    date: string;
+    available: boolean;
+    unavailableReason?: string;
+    windows: { startsAt: string; endsAt: string }[];
+    expectedRowVersion?: string;
+  },
+) {
+  const response = await withAuthRetry(() =>
+    api.put<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/day-override`, body),
+  );
+  return response.data;
+}
+
+export async function resetDayOverride(scheduleId: string, date: string, expectedRowVersion?: string) {
+  const response = await withAuthRetry(() =>
+    api.post<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/day-override/reset`, {
+      date,
+      expectedRowVersion,
+    }),
+  );
+  return response.data;
+}
+
+export async function copyDaySchedule(
+  scheduleId: string,
+  body: {
+    sourceDate: string;
+    targetDates: string[];
+    overwriteExisting: boolean;
+    expectedRowVersion?: string;
+  },
+) {
+  const response = await withAuthRetry(() =>
+    api.post<ScheduleDetails>(`/api/v1/schedules/${scheduleId}/copy-day`, body),
+  );
+  return response.data;
+}
+
+export async function getClosureImpact(scheduleId: string, date: string) {
+  const response = await withAuthRetry(() =>
+    api.get<{ confirmedAppointments: number }>(`/api/v1/schedules/${scheduleId}/closure-impact`, {
+      params: { date },
+    }),
   );
   return response.data;
 }
@@ -460,8 +683,12 @@ export type AppointmentDetails = {
   status: string;
   patientName: string;
   familyMemberId: string | null;
+  accountUserId: string | null;
   doctorId: string;
   doctorName: string;
+  doctorSpecialization: string | null;
+  doctorVerified: boolean;
+  scheduleId: string;
   clinicId: string;
   clinicName: string;
   branchId: string;
@@ -469,6 +696,10 @@ export type AppointmentDetails = {
   address: string;
   latitude: number | null;
   longitude: number | null;
+  googlePlaceId?: string | null;
+  mapsUrl?: string | null;
+  directionsUrl?: string | null;
+  locationVerified?: boolean;
   startsAtUtc: string;
   endsAtUtc: string;
   timeZoneId: string;
@@ -484,6 +715,11 @@ export type AppointmentDetails = {
   notes: string | null;
   decisionNote: string | null;
   cancellationPolicy: string;
+  tokenLabel: string | null;
+  tokenNumber: number | null;
+  bookingMode?: ScheduleBookingMode;
+  sameDayRescheduleCount?: number;
+  canSameDayReschedule?: boolean;
 };
 
 export type FamilyMember = {
@@ -501,7 +737,10 @@ export async function holdAppointment(scheduleId: string, date: string, start: s
   return response.data;
 }
 
-export async function confirmAppointment(appointmentId: string, body: { familyMemberId?: string; reason?: string; notes?: string }) {
+export async function confirmAppointment(
+  appointmentId: string,
+  body: { familyMemberId?: string; reason?: string; notes?: string; followUpId?: string },
+) {
   const response = await withAuthRetry(() => api.post<AppointmentDetails>(`/api/v1/appointments/${appointmentId}/confirm`, body));
   return response.data;
 }
@@ -515,6 +754,18 @@ export async function listAppointments() {
   return response.data;
 }
 
+export async function getAppointment(appointmentId: string) {
+  const response = await withAuthRetry(() => api.get<AppointmentDetails>(`/api/v1/appointments/${appointmentId}`));
+  return response.data;
+}
+
+export async function getPracticeAppointment(appointmentId: string) {
+  const response = await withAuthRetry(() =>
+    api.get<AppointmentDetails>(`/api/v1/appointments/${appointmentId}/practice`),
+  );
+  return response.data;
+}
+
 export async function cancelAppointment(appointmentId: string, reason: string) {
   const response = await withAuthRetry(() =>
     api.post<AppointmentDetails>(`/api/v1/appointments/${appointmentId}/cancellation`, { reason }),
@@ -522,16 +773,31 @@ export async function cancelAppointment(appointmentId: string, reason: string) {
   return response.data;
 }
 
-export async function rescheduleAppointment(appointmentId: string, date: string, start: string) {
+export async function rescheduleAppointment(appointmentId: string, date: string, start: string, reason?: string) {
   const response = await withAuthRetry(() =>
-    api.post<AppointmentDetails>(`/api/v1/appointments/${appointmentId}/reschedule`, { date, start }),
+    api.post<AppointmentDetails>(`/api/v1/appointments/${appointmentId}/reschedule`, {
+      date,
+      start,
+      reason: reason?.trim() || undefined,
+    }),
   );
   return response.data;
 }
 
-export async function listPracticeAppointments(from: string, to: string) {
+export async function listPracticeAppointments(
+  from: string,
+  to: string,
+  options?: { clinicId?: string | null; assignedOnly?: boolean },
+) {
   const response = await withAuthRetry(() =>
-    api.get<AppointmentDetails[]>('/api/v1/appointments/practice', { params: { from, to } }),
+    api.get<AppointmentDetails[]>('/api/v1/appointments/practice', {
+      params: {
+        from,
+        to,
+        assignedOnly: options?.assignedOnly ?? false,
+        ...(options?.clinicId ? { clinicId: options.clinicId } : {}),
+      },
+    }),
   );
   return response.data;
 }

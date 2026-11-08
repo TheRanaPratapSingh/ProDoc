@@ -22,6 +22,9 @@ public class PhoneNumberTests
     [InlineData("")]
     [InlineData("5876543210")]
     [InlineData("12345")]
+    [InlineData("987654321")] // 9 digits
+    [InlineData("98765432101")] // 11 digits without trunk/country prefix
+    [InlineData("9198765432101")] // 13 digits / oversized
     [InlineData("+1 202 555 0143")]
     public void Invalid_numbers_are_rejected(string input)
     {
@@ -29,5 +32,13 @@ public class PhoneNumberTests
 
         Assert.Equal("phone_invalid", exception.Code);
         Assert.Equal(400, exception.StatusCode);
+        Assert.False(PhoneNumber.TryParseIndianMobile(input, out _));
+    }
+
+    [Fact]
+    public void TryParse_returns_false_for_null_or_whitespace()
+    {
+        Assert.False(PhoneNumber.TryParseIndianMobile(null, out _));
+        Assert.False(PhoneNumber.TryParseIndianMobile("   ", out _));
     }
 }

@@ -5,6 +5,7 @@ using ProDoc.Application.Scheduling;
 using ProDoc.Domain.Appointments;
 using ProDoc.Domain.Common;
 using ProDoc.Domain.Governance;
+using ProDoc.Domain.Scheduling;
 using ProDoc.Infrastructure.Persistence;
 
 namespace ProDoc.Infrastructure.Appointments;
@@ -33,6 +34,62 @@ public sealed class AppointmentStore(ProDocDbContext db) : IAppointmentStore, IS
     public async Task<IReadOnlyList<Appointment>> ListForAdminAsync(DateOnly from, DateOnly to, CancellationToken cancellationToken) =>
         await InRange(from, to).OrderByDescending(item => item.StartsAtUtc).Take(100).ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<Appointment>> SearchClinicPatientVisitsAsync(
+        Guid clinicId,
+        Guid? branchId,
+        string? query,
+        Guid? accountUserId,
+        int take,
+        CancellationToken cancellationToken)
+    {
+        take = Math.Clamp(take, 1, 500);
+        var rows = db.Appointments.AsNoTracking()
+            .Where(item => item.ClinicId == clinicId
+                && item.Status != AppointmentStatus.Held
+                && item.Status != AppointmentStatus.Expired);
+
+        if (branchId is Guid branch)
+        {
+            rows = rows.Where(item => item.BranchId == branch);
+        }
+
+        var needle = string.IsNullOrWhiteSpace(query) ? null : query.Trim();
+        IReadOnlyList<Guid> profileMatches = [];
+        if (needle is not null)
+        {
+            profileMatches = await db.Patients.AsNoTracking()
+                .Where(patient => patient.FullName != null && patient.FullName.Contains(needle))
+                .Select(patient => patient.UserId)
+                .Take(50)
+                .ToListAsync(cancellationToken);
+        }
+
+        if (accountUserId is Guid accountId && needle is not null)
+        {
+            rows = rows.Where(item =>
+                item.AccountUserId == accountId
+                || item.PatientName.Contains(needle)
+                || (item.Reference != null && item.Reference.Contains(needle))
+                || profileMatches.Contains(item.AccountUserId));
+        }
+        else if (accountUserId is Guid accountOnly)
+        {
+            rows = rows.Where(item => item.AccountUserId == accountOnly);
+        }
+        else if (needle is not null)
+        {
+            rows = rows.Where(item =>
+                item.PatientName.Contains(needle)
+                || (item.Reference != null && item.Reference.Contains(needle))
+                || profileMatches.Contains(item.AccountUserId));
+        }
+
+        return await rows
+            .OrderByDescending(item => item.StartsAtUtc)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<string?> FindPatientNameAsync(Guid userId, CancellationToken cancellationToken) =>
         await db.Patients.AsNoTracking().Where(patient => patient.UserId == userId).Select(patient => patient.FullName).SingleOrDefaultAsync(cancellationToken);
 
@@ -55,11 +112,93 @@ public sealed class AppointmentStore(ProDocDbContext db) : IAppointmentStore, IS
         await strategy.ExecuteAsync(async () =>
         {
             await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
-            await ExpireSlotAsync(appointment.DoctorId, appointment.BranchId, appointment.StartsAtUtc, appointment.CreatedAtUtc, cancellationToken, appointment.Id);
+            // Timed slots are exclusive per start; hourly queues allow multiple concurrent holds in a range.
+            if (appointment.BookingMode == ScheduleBookingMode.TimedSlots)
+            {
+                await ExpireSlotAsync(
+                    appointment.DoctorId,
+                    appointment.BranchId,
+                    appointment.StartsAtUtc,
+                    appointment.CreatedAtUtc,
+                    cancellationToken,
+                    appointment.Id);
+            }
+
+            await ExpireStaleHoldsForDuplicateDayAsync(appointment, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+            await EnsureNoDuplicateDayInTransactionAsync(appointment, cancellationToken);
             db.Appointments.Add(appointment);
             await SaveAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         });
+    }
+
+    private async Task ExpireStaleHoldsForDuplicateDayAsync(Appointment appointment, CancellationToken cancellationToken)
+    {
+        var stale = await db.Appointments
+            .Where(item =>
+                item.Id != appointment.Id
+                && item.AccountUserId == appointment.AccountUserId
+                && item.DoctorId == appointment.DoctorId
+                && item.ClinicLocalDate == appointment.ClinicLocalDate
+                && item.Status == AppointmentStatus.Held
+                && item.HoldExpiresAtUtc <= appointment.CreatedAtUtc)
+            .ToListAsync(cancellationToken);
+        foreach (var row in stale)
+        {
+            row.Expire(appointment.CreatedAtUtc);
+        }
+    }
+
+    private async Task EnsureNoDuplicateDayInTransactionAsync(Appointment appointment, CancellationToken cancellationToken)
+    {
+        var conflict = await db.Appointments
+            .AsNoTracking()
+            .Where(item =>
+                item.Id != appointment.Id
+                && item.AccountUserId == appointment.AccountUserId
+                && item.DoctorId == appointment.DoctorId
+                && item.ClinicLocalDate == appointment.ClinicLocalDate
+                && (item.Status == AppointmentStatus.Requested
+                    || item.Status == AppointmentStatus.Confirmed
+                    || item.Status == AppointmentStatus.CheckedIn
+                    || (item.Status == AppointmentStatus.Held && item.HoldExpiresAtUtc > appointment.CreatedAtUtc)))
+            .OrderBy(item => item.StartsAtUtc)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (conflict is null)
+        {
+            return;
+        }
+
+        throw DomainException.Conflict(
+            "duplicate_appointment",
+            "You already have an appointment with this doctor on this date. Please select another date.");
+    }
+
+    public async Task<IReadOnlyList<Appointment>> ListActiveForDuplicateCheckAsync(
+        Guid accountUserId,
+        Guid doctorId,
+        DateOnly clinicLocalDate,
+        DateTimeOffset now,
+        Guid? exceptAppointmentId,
+        CancellationToken cancellationToken)
+    {
+        var query = db.Appointments.AsNoTracking()
+            .Where(item =>
+                item.AccountUserId == accountUserId
+                && item.DoctorId == doctorId
+                && item.ClinicLocalDate == clinicLocalDate
+                && (item.Status == AppointmentStatus.Requested
+                    || item.Status == AppointmentStatus.Confirmed
+                    || item.Status == AppointmentStatus.CheckedIn
+                    || (item.Status == AppointmentStatus.Held && item.HoldExpiresAtUtc > now)));
+
+        if (exceptAppointmentId is Guid exceptId)
+        {
+            query = query.Where(item => item.Id != exceptId);
+        }
+
+        return await query.OrderBy(item => item.StartsAtUtc).Take(20).ToListAsync(cancellationToken);
     }
 
     public async Task SaveChangesAsync(AuditLog? audit, CancellationToken cancellationToken)
@@ -78,7 +217,20 @@ public sealed class AppointmentStore(ProDocDbContext db) : IAppointmentStore, IS
         await strategy.ExecuteAsync(async () =>
         {
             await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
-            await ExpireSlotAsync(appointment.DoctorId, appointment.BranchId, appointment.StartsAtUtc, appointment.UpdatedAtUtc, cancellationToken, appointment.Id);
+            if (appointment.BookingMode == ScheduleBookingMode.TimedSlots)
+            {
+                await ExpireSlotAsync(
+                    appointment.DoctorId,
+                    appointment.BranchId,
+                    appointment.StartsAtUtc,
+                    appointment.UpdatedAtUtc,
+                    cancellationToken,
+                    appointment.Id);
+            }
+
+            await ExpireStaleHoldsForDuplicateDayAsync(appointment, cancellationToken);
+            await db.SaveChangesAsync(cancellationToken);
+            await EnsureNoDuplicateDayInTransactionAsync(appointment, cancellationToken);
             if (audit is not null)
             {
                 db.Set<AuditLog>().Add(audit);
@@ -94,19 +246,38 @@ public sealed class AppointmentStore(ProDocDbContext db) : IAppointmentStore, IS
         Guid branchId,
         DateOnly date,
         DateTimeOffset now,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? exceptAppointmentId = null)
     {
-        var rows = await db.Appointments.AsNoTracking()
+        var counts = await OccupancyCountsAsync(doctorId, branchId, date, now, cancellationToken, exceptAppointmentId);
+        return counts.Where(pair => pair.Value > 0).Select(pair => pair.Key).ToHashSet();
+    }
+
+    public async Task<IReadOnlyDictionary<TimeOnly, int>> OccupancyCountsAsync(
+        Guid doctorId,
+        Guid branchId,
+        DateOnly date,
+        DateTimeOffset now,
+        CancellationToken cancellationToken,
+        Guid? exceptAppointmentId = null)
+    {
+        var query = db.Appointments.AsNoTracking()
             .Where(item => item.DoctorId == doctorId && item.BranchId == branchId && item.StartsAtUtc >= now.AddDays(-1) && item.StartsAtUtc < now.AddDays(61))
             .Where(item => item.Status == AppointmentStatus.Requested || item.Status == AppointmentStatus.Confirmed
-                || item.Status == AppointmentStatus.CheckedIn || item.Status == AppointmentStatus.Completed
-                || (item.Status == AppointmentStatus.Held && item.HoldExpiresAtUtc > now))
-            .ToListAsync(cancellationToken);
+                || item.Status == AppointmentStatus.CheckedIn
+                || (item.Status == AppointmentStatus.Held && item.HoldExpiresAtUtc > now));
+
+        if (exceptAppointmentId is Guid exceptId)
+        {
+            query = query.Where(item => item.Id != exceptId);
+        }
+
+        var rows = await query.ToListAsync(cancellationToken);
         return rows
             .Select(item => Local(item.StartsAtUtc, item.TimeZoneId))
             .Where(local => DateOnly.FromDateTime(local) == date)
-            .Select(local => TimeOnly.FromDateTime(local))
-            .ToHashSet();
+            .GroupBy(local => TimeOnly.FromDateTime(local))
+            .ToDictionary(group => group.Key, group => group.Count());
     }
 
     private IQueryable<Appointment> InRange(DateOnly from, DateOnly to)
@@ -141,9 +312,32 @@ public sealed class AppointmentStore(ProDocDbContext db) : IAppointmentStore, IS
         }
         catch (DbUpdateException exception) when (exception.InnerException is SqlException sql && sql.Number is 2601 or 2627)
         {
+            var detail = exception.InnerException?.Message ?? exception.Message;
+            if (detail.Contains("IX_Appointments_AccountUserId_DoctorId_ClinicLocalDate", StringComparison.OrdinalIgnoreCase)
+                || detail.Contains("AccountUserId_DoctorId_ClinicLocalDate", StringComparison.OrdinalIgnoreCase))
+            {
+                throw DomainException.Conflict(
+                    "duplicate_appointment",
+                    "You already have an appointment with this doctor on this date. Please select another date.");
+            }
+
             throw DomainException.Conflict("slot_taken", "That time was just taken. Choose another.");
         }
     }
+
+    public Task<AppointmentShareLink?> FindShareLinkByHashAsync(string tokenHash, bool tracking, CancellationToken cancellationToken)
+    {
+        var query = tracking ? db.AppointmentShareLinks : db.AppointmentShareLinks.AsNoTracking();
+        return query.SingleOrDefaultAsync(item => item.TokenHash == tokenHash, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<AppointmentShareLink>> ListShareLinksAsync(Guid appointmentId, CancellationToken cancellationToken) =>
+        await db.AppointmentShareLinks
+            .Where(item => item.AppointmentId == appointmentId)
+            .OrderByDescending(item => item.CreatedAtUtc)
+            .ToListAsync(cancellationToken);
+
+    public void AddShareLink(AppointmentShareLink link) => db.AppointmentShareLinks.Add(link);
 
     private static DateTime Local(DateTimeOffset instant, string timeZoneId)
     {

@@ -37,10 +37,13 @@ public sealed class MedicalStore(ProDocDbContext db) : IMedicalStore
         Guid? familyMemberId,
         CancellationToken cancellationToken)
     {
+        // SQL NULL = NULL is unknown — compare null family members explicitly with IS NULL.
         return await db.Appointments.AsNoTracking().AnyAsync(
             item => item.DoctorId == doctorId
                 && item.AccountUserId == accountUserId
-                && item.FamilyMemberId == familyMemberId
+                && (familyMemberId == null
+                    ? item.FamilyMemberId == null
+                    : item.FamilyMemberId == familyMemberId)
                 && (item.Status == AppointmentStatus.Confirmed
                     || item.Status == AppointmentStatus.CheckedIn
                     || item.Status == AppointmentStatus.Completed
@@ -264,6 +267,78 @@ public sealed class MedicalStore(ProDocDbContext db) : IMedicalStore
 
     public async Task<IReadOnlyList<PatientMedicalRecord>> ListRecordsForAccountAsync(Guid accountUserId, CancellationToken cancellationToken) =>
         await RecordQuery(false).Where(item => item.AccountUserId == accountUserId).OrderBy(item => item.SubjectName).ToListAsync(cancellationToken);
+
+    public async Task<(int InProgress, int CompletedToday, int WithPrescriptionToday)> CountDoctorActivityAsync(
+        Guid doctorId,
+        DateOnly today,
+        Guid? clinicId,
+        CancellationToken cancellationToken)
+    {
+        var dayStart = new DateTimeOffset(today.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+        var dayEnd = dayStart.AddDays(1);
+        var consultQuery = db.ConsultationRecords.AsNoTracking().Where(item => item.DoctorId == doctorId);
+        if (clinicId is Guid clinic)
+        {
+            var appointmentIds = db.Appointments.AsNoTracking()
+                .Where(item => item.DoctorId == doctorId && item.ClinicId == clinic)
+                .Select(item => item.Id);
+            consultQuery = consultQuery.Where(item => item.AppointmentId != null && appointmentIds.Contains(item.AppointmentId.Value));
+        }
+
+        var inProgress = await consultQuery.CountAsync(item => item.Status == ConsultationStatus.InProgress, cancellationToken);
+        var completedToday = await consultQuery.CountAsync(
+            item => item.Status == ConsultationStatus.Completed && item.UpdatedAtUtc >= dayStart && item.UpdatedAtUtc < dayEnd,
+            cancellationToken);
+
+        var rxQuery = db.Prescriptions.AsNoTracking().Where(item => item.DoctorId == doctorId && item.CreatedAtUtc >= dayStart && item.CreatedAtUtc < dayEnd);
+        if (clinicId is Guid rxClinic)
+        {
+            var appointmentIds = db.Appointments.AsNoTracking()
+                .Where(item => item.DoctorId == doctorId && item.ClinicId == rxClinic)
+                .Select(item => item.Id);
+            rxQuery = rxQuery.Where(item => item.AppointmentId != null && appointmentIds.Contains(item.AppointmentId.Value));
+        }
+
+        var withPrescription = await rxQuery.CountAsync(cancellationToken);
+        return (inProgress, completedToday, withPrescription);
+    }
+
+    public async Task<IReadOnlyList<ProDoc.Application.Providers.DoctorPrescriptionRow>> ListDoctorPrescriptionsAsync(
+        Guid doctorId,
+        Guid? clinicId,
+        CancellationToken cancellationToken)
+    {
+        var query =
+            from prescription in db.Prescriptions.AsNoTracking().Include(item => item.Versions)
+            join appointment in db.Appointments.AsNoTracking() on prescription.AppointmentId equals appointment.Id into appointmentJoin
+            from appointment in appointmentJoin.DefaultIfEmpty()
+            join clinic in db.Clinics.AsNoTracking() on appointment.ClinicId equals clinic.Id into clinicJoin
+            from clinic in clinicJoin.DefaultIfEmpty()
+            where prescription.DoctorId == doctorId
+            select new { prescription, appointment, clinic };
+
+        if (clinicId is Guid scopedClinic)
+        {
+            query = query.Where(item => item.appointment != null && item.appointment.ClinicId == scopedClinic);
+        }
+
+        var rows = await query.OrderByDescending(item => item.prescription.CreatedAtUtc).Take(100).ToListAsync(cancellationToken);
+        return rows.Select(item =>
+        {
+            var version = item.prescription.Versions.FirstOrDefault(version => version.VersionNumber == item.prescription.CurrentVersionNumber);
+            return new ProDoc.Application.Providers.DoctorPrescriptionRow(
+                item.appointment?.Id ?? Guid.Empty,
+                item.appointment?.Reference,
+                item.appointment?.PatientName ?? "Patient",
+                item.prescription.Id,
+                item.prescription.Number,
+                item.prescription.Status.ToString(),
+                version?.Diagnosis,
+                item.appointment?.StartsAtUtc ?? item.prescription.CreatedAtUtc,
+                item.appointment?.ClinicId ?? Guid.Empty,
+                item.clinic?.Name ?? "Clinic");
+        }).ToArray();
+    }
 
     private IQueryable<PatientMedicalRecord> RecordQuery(bool tracking)
     {

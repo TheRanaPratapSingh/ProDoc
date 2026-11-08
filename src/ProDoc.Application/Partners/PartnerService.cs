@@ -533,7 +533,13 @@ public sealed class PartnerService(
     {
         RequireScope(principal, PartnerScopes.AvailabilityRead);
         await EnsureSandboxDoctorAccessAsync(principal, doctorId, cancellationToken);
-        return await schedules.GetCalendarAsync(doctorId, from, to, branchId, cancellationToken);
+        return await schedules.GetCalendarAsync(
+            doctorId,
+            from,
+            to,
+            branchId,
+            cancellationToken,
+            AvailabilityHorizon.PatientTwoWeeks);
     }
 
     public async Task<PartnerOrganizationPublic> GetOrganizationAsync(

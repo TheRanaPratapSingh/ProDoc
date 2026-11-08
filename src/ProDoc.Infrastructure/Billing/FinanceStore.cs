@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ProDoc.Application.Billing;
+using ProDoc.Application.Providers;
 using ProDoc.Domain.Appointments;
 using ProDoc.Domain.Billing;
 using ProDoc.Domain.Governance;
@@ -227,6 +228,59 @@ public sealed class FinanceStore(ProDocDbContext db) : IFinanceStore
 
         var rows = await query.OrderByDescending(item => item.CreatedAtUtc).Take(50).ToListAsync(cancellationToken);
         return rows.Select(MapSettlement).ToArray();
+    }
+
+    public async Task<DoctorEarningsDashboard> BuildDoctorEarningsAsync(
+        Guid doctorId,
+        Guid? clinicId,
+        DateOnly today,
+        CancellationToken cancellationToken)
+    {
+        var snapshotsQuery = db.CommissionSnapshots.AsNoTracking().Where(item => item.DoctorId == doctorId);
+        if (clinicId is Guid clinic)
+        {
+            snapshotsQuery = snapshotsQuery.Where(item => item.ClinicId == clinic);
+        }
+
+        var snapshots = await snapshotsQuery.ToListAsync(cancellationToken);
+        var monthStart = new DateOnly(today.Year, today.Month, 1);
+        var monthStartUtc = new DateTimeOffset(monthStart.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+        var todayStartUtc = new DateTimeOffset(today.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+        var tomorrowStartUtc = todayStartUtc.AddDays(1);
+
+        var affiliatedClinicIds = await db.DoctorClinicAffiliations.AsNoTracking()
+            .Where(item => item.DoctorId == doctorId)
+            .Select(item => item.ClinicId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        var clinicIds = clinicId is Guid scoped
+            ? new[] { scoped }
+            : affiliatedClinicIds.Concat(snapshots.Select(item => item.ClinicId)).Distinct().ToArray();
+        IReadOnlyList<SettlementBatch> settlements = clinicIds.Length == 0
+            ? Array.Empty<SettlementBatch>()
+            : await db.SettlementBatches.AsNoTracking()
+                .Include(item => item.Lines)
+                .Where(item => clinicIds.Contains(item.ClinicId))
+                .OrderByDescending(item => item.CreatedAtUtc)
+                .Take(20)
+                .ToListAsync(cancellationToken);
+
+        var paymentsEnabled = snapshots.Count > 0
+            || (clinicIds.Length > 0
+                && await db.ClinicPaymentSettings.AsNoTracking().AnyAsync(item => clinicIds.Contains(item.ClinicId), cancellationToken));
+
+        return new DoctorEarningsDashboard(
+            doctorId,
+            clinicId,
+            paymentsEnabled,
+            snapshots.Sum(item => item.ConsultationFee),
+            snapshots.Where(item => item.CapturedAtUtc >= todayStartUtc && item.CapturedAtUtc < tomorrowStartUtc).Sum(item => item.ConsultationFee),
+            snapshots.Where(item => item.CapturedAtUtc >= monthStartUtc).Sum(item => item.ConsultationFee),
+            snapshots.Sum(item => item.CommissionAmount),
+            snapshots.Sum(item => item.ClinicPayableAmount),
+            snapshots.Where(item => item.SettlementBatchId == null).Sum(item => item.ClinicPayableAmount),
+            snapshots.OrderByDescending(item => item.CapturedAtUtc).Take(20).Select(MapSnapshot).ToArray(),
+            settlements.Select(MapSettlement).ToArray());
     }
 
     private static CommissionSnapshotDetails MapSnapshot(CommissionSnapshot item) =>

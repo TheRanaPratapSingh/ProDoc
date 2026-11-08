@@ -31,6 +31,7 @@ export type RatingSummary = {
   averageCleanliness: number | null;
   averageStaffBehaviour: number | null;
   averageWaitingTime: number | null;
+  averageConsultation: number | null;
 };
 
 export type ReviewResponse = {
@@ -48,18 +49,22 @@ export type ReviewDetails = {
   targetKind: string;
   doctorId: string | null;
   clinicId: string | null;
-  overallRating: number;
+  overallRating: number | null;
   communicationRating: number | null;
   cleanlinessRating: number | null;
   staffBehaviourRating: number | null;
   waitingTimeRating: number | null;
+  consultationRating: number | null;
   body: string | null;
   isVerifiedVisit: boolean;
   status: string;
   createdAtUtc: string;
   editedAtUtc: string | null;
   canEdit: boolean;
+  canDelete: boolean;
   responses: ReviewResponse[];
+  authorDisplayName: string | null;
+  appointmentCompletedAtUtc: string | null;
 };
 
 export type EligibleReviewTarget = {
@@ -80,50 +85,64 @@ export type ReviewModerationItem = {
   targetKind: string;
   doctorId: string | null;
   clinicId: string | null;
-  overallRating: number;
+  overallRating: number | null;
   body: string | null;
   status: string;
   openReportCount: number;
   createdAtUtc: string;
 };
 
+export type ReviewPayload = {
+  overallRating?: number | null;
+  communicationRating?: number | null;
+  cleanlinessRating?: number | null;
+  staffBehaviourRating?: number | null;
+  waitingTimeRating?: number | null;
+  consultationRating?: number | null;
+  body?: string | null;
+};
+
 export async function listEligibleReviews() {
   return withAuthRetry(async () => (await api.get<EligibleReviewTarget[]>('/api/v1/reviews/eligible')).data);
 }
 
-export async function createReview(body: {
-  appointmentId: string;
-  targetKind: string;
-  overallRating: number;
-  communicationRating?: number;
-  cleanlinessRating?: number;
-  staffBehaviourRating?: number;
-  waitingTimeRating?: number;
-  body?: string;
-}) {
+export async function listMyReviews() {
+  return withAuthRetry(async () => (await api.get<ReviewDetails[]>('/api/v1/reviews/mine')).data);
+}
+
+export async function getReview(reviewId: string) {
+  return withAuthRetry(async () => (await api.get<ReviewDetails>(`/api/v1/reviews/${reviewId}`)).data);
+}
+
+export async function createReview(
+  body: ReviewPayload & {
+    appointmentId: string;
+    targetKind: string;
+  },
+) {
   return withAuthRetry(async () => (await api.post<ReviewDetails>('/api/v1/reviews', body)).data);
 }
 
-export async function updateReview(
-  reviewId: string,
-  body: {
-    overallRating: number;
-    communicationRating?: number;
-    cleanlinessRating?: number;
-    staffBehaviourRating?: number;
-    waitingTimeRating?: number;
-    body?: string;
-  },
-) {
+export async function updateReview(reviewId: string, body: ReviewPayload) {
   return withAuthRetry(async () => (await api.put<ReviewDetails>(`/api/v1/reviews/${reviewId}`, body)).data);
 }
 
-export async function listDoctorReviews(doctorId: string, page = 1) {
-  return withAuthRetry(async () => (await api.get<ReviewDetails[]>(`/api/v1/doctors/${doctorId}/reviews`, { params: { page } })).data);
+export async function deleteReview(reviewId: string) {
+  return withAuthRetry(async () => {
+    await api.delete(`/api/v1/reviews/${reviewId}`);
+  });
 }
 
-export async function listClinicReviews(clinicId: string, page = 1) {
-  return withAuthRetry(async () => (await api.get<ReviewDetails[]>(`/api/v1/clinics/${clinicId}/reviews`, { params: { page } })).data);
+export async function listDoctorReviews(doctorId: string, page = 1, pageSize = 10) {
+  return withAuthRetry(
+    async () => (await api.get<ReviewDetails[]>(`/api/v1/doctors/${doctorId}/reviews`, { params: { page, pageSize } })).data,
+  );
+}
+
+export async function listClinicReviews(clinicId: string, page = 1, pageSize = 10) {
+  return withAuthRetry(
+    async () => (await api.get<ReviewDetails[]>(`/api/v1/clinics/${clinicId}/reviews`, { params: { page, pageSize } })).data,
+  );
 }
 
 export async function getDoctorRatingSummary(doctorId: string) {

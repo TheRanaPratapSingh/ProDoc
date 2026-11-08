@@ -11,6 +11,8 @@ public sealed class SupportTicketConfiguration : IEntityTypeConfiguration<Suppor
         builder.ToTable("SupportTickets");
         builder.HasKey(x => x.Id);
         builder.Property(x => x.Number).HasMaxLength(32).IsRequired();
+        builder.Property(x => x.CreatedByRole).HasMaxLength(40).IsRequired();
+        builder.Property(x => x.IssueType).HasMaxLength(80).IsRequired();
         builder.Property(x => x.Subject).HasMaxLength(160).IsRequired();
         builder.Property(x => x.Description).HasMaxLength(4000).IsRequired();
         builder.Property(x => x.ResolutionDetails).HasMaxLength(2000);

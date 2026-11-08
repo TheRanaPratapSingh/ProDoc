@@ -22,7 +22,7 @@ public sealed class ClinicOperationsService(IScheduleStore schedules, IProviderS
         await AuthorizeAsync(userId, clinicId, branchId, cancellationToken);
         var hours = periods.Select(period => BranchOperatingHour.Create(branchId, period.Day, period.OpensAt, period.ClosesAt, period.IsClosed)).ToArray();
         await schedules.ReplaceOperatingHoursAsync(branchId, hours, cancellationToken);
-        await schedules.SaveChangesAsync(cancellationToken);
+        await schedules.SaveChangesAsync(null, cancellationToken);
         return await ReadAsync(branchId, cancellationToken);
     }
 
@@ -42,7 +42,7 @@ public sealed class ClinicOperationsService(IScheduleStore schedules, IProviderS
         }
 
         await schedules.AddBranchClosureAsync(BranchClosure.Create(branchId, date, reason), cancellationToken);
-        await schedules.SaveChangesAsync(cancellationToken);
+        await schedules.SaveChangesAsync(null, cancellationToken);
         return await ReadAsync(branchId, cancellationToken);
     }
 
@@ -59,7 +59,7 @@ public sealed class ClinicOperationsService(IScheduleStore schedules, IProviderS
             throw DomainException.NotFound("closure_not_found", "That closure was not found.");
         }
 
-        await schedules.SaveChangesAsync(cancellationToken);
+        await schedules.SaveChangesAsync(null, cancellationToken);
         return await ReadAsync(branchId, cancellationToken);
     }
 
@@ -84,7 +84,7 @@ public sealed class ClinicOperationsService(IScheduleStore schedules, IProviderS
             .Select(name => ClinicFacility.Create(clinicId, name))
             .ToArray();
         await schedules.ReplaceFacilitiesAsync(clinicId, distinct, cancellationToken);
-        await schedules.SaveChangesAsync(cancellationToken);
+        await schedules.SaveChangesAsync(null, cancellationToken);
         return distinct.Select(item => item.Name).Order(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 

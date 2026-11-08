@@ -13,7 +13,9 @@ namespace ProDoc.Api.Tests;
 public sealed class ProDocApiFactory : WebApplicationFactory<Program>
 {
     private readonly string _connectionString =
-        $"Server=localhost\\SQLEXPRESS;Database=ProDocTests_{Guid.NewGuid():N};Trusted_Connection=True;TrustServerCertificate=True;MultipleActiveResultSets=True";
+        (Environment.GetEnvironmentVariable("PRODOC_TEST_SQL_SERVER") is { Length: > 0 } server
+            ? $"Server={server};Database=ProDocTests_{Guid.NewGuid():N};Trusted_Connection=True;TrustServerCertificate=True;MultipleActiveResultSets=True"
+            : $"Server=localhost;Database=ProDocTests_{Guid.NewGuid():N};Trusted_Connection=True;TrustServerCertificate=True;MultipleActiveResultSets=True");
 
     public ProDocApiFactory()
     {
@@ -31,7 +33,8 @@ public sealed class ProDocApiFactory : WebApplicationFactory<Program>
             {
                 ["ConnectionStrings:ProDoc"] = _connectionString,
                 ["Auth:OtpResendCooldownSeconds"] = "0",
-                ["Auth:OtpMaxRequestsPerWindow"] = "100"
+                ["Auth:OtpMaxRequestsPerWindow"] = "100",
+                ["Auth:DevelopmentAdminPhones:0"] = "9000000001"
             });
         });
     }
@@ -104,6 +107,33 @@ public sealed class AuthFlowTests
         Assert.Equal(HttpStatusCode.Unauthorized, replacement.StatusCode);
     }
 
+    [Fact]
+    public async Task Incorrect_otp_returns_controlled_validation_problem_not_500()
+    {
+        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = "9765432100" });
+        Assert.Equal(HttpStatusCode.OK, otpResponse.StatusCode);
+
+        var verifyResponse = await _client.PostAsJsonAsync(
+            "/api/v1/auth/otp/verify",
+            new { phoneNumber = "9765432100", code = "000000", deviceName = "integration-test" });
+        var problem = await verifyResponse.Content.ReadFromJsonAsync<ProblemBody>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, verifyResponse.StatusCode);
+        Assert.Equal("otp_invalid", problem!.Code);
+        Assert.Equal("Incorrect OTP. Please try again.", problem.Title);
+    }
+
+    [Fact]
+    public async Task Invalid_phone_on_otp_request_returns_400_without_server_error()
+    {
+        var response = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = "123" });
+        var problem = await response.Content.ReadFromJsonAsync<ProblemBody>();
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("phone_invalid", problem!.Code);
+        Assert.NotEqual(HttpStatusCode.InternalServerError, response.StatusCode);
+    }
+
     private async Task<SessionBody> SignInAsync(string phone)
     {
         var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone });
@@ -136,4 +166,6 @@ public sealed class AuthFlowTests
         string PreferredLanguage,
         IReadOnlyList<string> Roles,
         IReadOnlyList<string> Permissions);
+
+    private sealed record ProblemBody(string? Title, string? Detail, string? Code, string? Type);
 }

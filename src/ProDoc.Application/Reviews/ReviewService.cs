@@ -43,11 +43,12 @@ public sealed class ReviewService(IReviewStore store, IClock clock)
         Guid userId,
         Guid appointmentId,
         string targetKind,
-        int overallRating,
+        int? overallRating,
         int? communicationRating,
         int? cleanlinessRating,
         int? staffBehaviourRating,
         int? waitingTimeRating,
+        int? consultationRating,
         string? body,
         RequestMetadata metadata,
         CancellationToken cancellationToken)
@@ -58,40 +59,66 @@ public sealed class ReviewService(IReviewStore store, IClock clock)
         }
 
         var appointment = await RequireEligibleAppointmentAsync(userId, appointmentId, cancellationToken);
-        if (await store.FindReviewByAppointmentTargetAsync(appointmentId, kind, cancellationToken) is not null)
+        var existing = await store.FindAnyReviewByAppointmentTargetAsync(appointmentId, kind, tracking: true, cancellationToken);
+        if (existing is not null && existing.Status != ReviewStatus.Removed)
         {
             throw DomainException.Conflict("review_exists", "A verified review already exists for this appointment target.");
         }
 
-        var review = kind == ReviewTargetKind.Doctor
-            ? PatientReview.Create(
-                appointment.Id,
-                userId,
-                kind,
-                appointment.DoctorId,
-                appointment.ClinicId,
+        if (existing is not null && existing.AuthorUserId != userId)
+        {
+            throw DomainException.Conflict("review_exists", "A verified review already exists for this appointment target.");
+        }
+
+        PatientReview review;
+        if (existing is not null)
+        {
+            // Soft-deleted row keeps the unique (appointment, target) key — republish instead of inserting.
+            existing.Republish(
                 overallRating,
-                communicationRating,
-                null,
-                null,
-                waitingTimeRating,
-                body,
-                clock.UtcNow)
-            : PatientReview.Create(
-                appointment.Id,
-                userId,
-                kind,
-                null,
-                appointment.ClinicId,
-                overallRating,
-                null,
-                cleanlinessRating,
+                kind == ReviewTargetKind.Doctor ? communicationRating : null,
+                kind == ReviewTargetKind.Clinic ? cleanlinessRating : null,
                 staffBehaviourRating,
                 waitingTimeRating,
+                kind == ReviewTargetKind.Doctor ? consultationRating : null,
                 body,
                 clock.UtcNow);
+            review = existing;
+        }
+        else
+        {
+            review = kind == ReviewTargetKind.Doctor
+                ? PatientReview.Create(
+                    appointment.Id,
+                    userId,
+                    kind,
+                    appointment.DoctorId,
+                    appointment.ClinicId,
+                    overallRating,
+                    communicationRating,
+                    null,
+                    staffBehaviourRating,
+                    waitingTimeRating,
+                    consultationRating,
+                    body,
+                    clock.UtcNow)
+                : PatientReview.Create(
+                    appointment.Id,
+                    userId,
+                    kind,
+                    null,
+                    appointment.ClinicId,
+                    overallRating,
+                    null,
+                    cleanlinessRating,
+                    staffBehaviourRating,
+                    waitingTimeRating,
+                    null,
+                    body,
+                    clock.UtcNow);
+            store.AddReview(review);
+        }
 
-        store.AddReview(review);
         await store.AddAuditAsync(Audit(userId, AuditActions.ReviewCreated, metadata), cancellationToken);
         await store.SaveChangesAsync(cancellationToken);
         return await MapReviewAsync(review, userId, cancellationToken);
@@ -100,11 +127,12 @@ public sealed class ReviewService(IReviewStore store, IClock clock)
     public async Task<ReviewDetails> UpdateAsync(
         Guid userId,
         Guid reviewId,
-        int overallRating,
+        int? overallRating,
         int? communicationRating,
         int? cleanlinessRating,
         int? staffBehaviourRating,
         int? waitingTimeRating,
+        int? consultationRating,
         string? body,
         RequestMetadata metadata,
         CancellationToken cancellationToken)
@@ -117,10 +145,38 @@ public sealed class ReviewService(IReviewStore store, IClock clock)
         }
 
         var hours = await EditWindowHoursAsync(cancellationToken);
-        review.Edit(overallRating, communicationRating, cleanlinessRating, staffBehaviourRating, waitingTimeRating, body, clock.UtcNow, hours);
+        review.Edit(
+            overallRating,
+            communicationRating,
+            cleanlinessRating,
+            staffBehaviourRating,
+            waitingTimeRating,
+            consultationRating,
+            body,
+            clock.UtcNow,
+            hours);
         await store.AddAuditAsync(Audit(userId, AuditActions.ReviewUpdated, metadata), cancellationToken);
         await store.SaveChangesAsync(cancellationToken);
         return await MapReviewAsync(review, userId, cancellationToken);
+    }
+
+    public async Task DeleteAsync(
+        Guid userId,
+        Guid reviewId,
+        RequestMetadata metadata,
+        CancellationToken cancellationToken)
+    {
+        var review = await store.FindReviewAsync(reviewId, true, cancellationToken)
+            ?? throw DomainException.NotFound("review_not_found", "That review was not found.");
+        if (review.AuthorUserId != userId)
+        {
+            throw DomainException.NotFound("review_not_found", "That review was not found.");
+        }
+
+        var hours = await EditWindowHoursAsync(cancellationToken);
+        review.Withdraw(clock.UtcNow, hours);
+        await store.AddAuditAsync(Audit(userId, AuditActions.ReviewUpdated, metadata), cancellationToken);
+        await store.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<ReviewDetails> GetAsync(Guid? userId, Guid reviewId, CancellationToken cancellationToken)
@@ -282,6 +338,18 @@ public sealed class ReviewService(IReviewStore store, IClock clock)
         return mapped;
     }
 
+    public async Task<IReadOnlyList<ReviewDetails>> ListMineForPatientAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        var rows = await store.ListForAuthorAsync(userId, 50, cancellationToken);
+        var mapped = new List<ReviewDetails>();
+        foreach (var row in rows)
+        {
+            mapped.Add(await MapReviewAsync(row, userId, cancellationToken));
+        }
+
+        return mapped;
+    }
+
     public async Task<FeedbackDetails> SubmitFeedbackAsync(
         Guid userId,
         string category,
@@ -419,8 +487,10 @@ public sealed class ReviewService(IReviewStore store, IClock clock)
 
     private static RatingSummary BuildSummary(IReadOnlyList<PatientReview> rows)
     {
-        var count = rows.Count;
-        var averagePublic = count >= ReviewPolicy.MinimumReviewsForPublicAverage;
+        // Only overall ratings contribute to the public average — missing values are never treated as zero.
+        var overallValues = rows.Where(item => item.OverallRating is not null).Select(item => item.OverallRating!.Value).ToArray();
+        var overallCount = overallValues.Length;
+        var averagePublic = overallCount >= ReviewPolicy.MinimumReviewsForPublicAverage;
         decimal? Avg(Func<PatientReview, int?> selector)
         {
             var values = rows.Select(selector).Where(item => item is not null).Select(item => item!.Value).ToArray();
@@ -428,30 +498,33 @@ public sealed class ReviewService(IReviewStore store, IClock clock)
         }
 
         var distribution = Enumerable.Range(1, 5)
-            .Select(stars => new RatingBucket(stars, rows.Count(item => item.OverallRating == stars)))
+            .Select(stars => new RatingBucket(stars, overallValues.Count(item => item == stars)))
             .Reverse()
             .ToArray();
 
         return new RatingSummary(
-            count,
-            averagePublic ? Math.Round((decimal)rows.Average(item => item.OverallRating), 2) : null,
+            overallCount,
+            averagePublic ? Math.Round((decimal)overallValues.Average(), 2) : null,
             averagePublic,
             averagePublic
                 ? "Average from verified completed-visit reviews."
-                : $"Public averages appear after {ReviewPolicy.MinimumReviewsForPublicAverage} verified reviews. {count} published so far.",
+                : "No ratings yet",
             distribution,
             averagePublic ? Avg(item => item.CommunicationRating) : null,
             averagePublic ? Avg(item => item.CleanlinessRating) : null,
             averagePublic ? Avg(item => item.StaffBehaviourRating) : null,
-            averagePublic ? Avg(item => item.WaitingTimeRating) : null);
+            averagePublic ? Avg(item => item.WaitingTimeRating) : null,
+            averagePublic ? Avg(item => item.ConsultationRating) : null);
     }
 
     private async Task<ReviewDetails> MapReviewAsync(PatientReview review, Guid? viewerUserId, CancellationToken cancellationToken)
     {
         var hours = await EditWindowHoursAsync(cancellationToken);
-        var canEdit = viewerUserId == review.AuthorUserId
+        var canManage = viewerUserId == review.AuthorUserId
             && review.Status != ReviewStatus.Removed
             && clock.UtcNow <= review.CreatedAtUtc.AddHours(hours);
+        var patientName = await store.FindAppointmentPatientNameAsync(review.AppointmentId, cancellationToken);
+        var completedAt = await store.FindAppointmentCompletedAtAsync(review.AppointmentId, cancellationToken);
         return new ReviewDetails(
             review.Id,
             review.AppointmentId,
@@ -468,11 +541,32 @@ public sealed class ReviewService(IReviewStore store, IClock clock)
             review.Status.ToString(),
             review.CreatedAtUtc,
             review.EditedAtUtc,
-            canEdit,
+            canManage,
             review.Responses
                 .OrderBy(item => item.CreatedAtUtc)
                 .Select(item => new ReviewResponseDetails(item.Id, item.ResponderKind.ToString(), item.Body, item.EditCount, item.CreatedAtUtc, item.UpdatedAtUtc))
-                .ToArray());
+                .ToArray(),
+            review.ConsultationRating,
+            PrivacySafeAuthorName(patientName),
+            completedAt,
+            canManage);
+    }
+
+    private static string PrivacySafeAuthorName(string? fullName)
+    {
+        if (string.IsNullOrWhiteSpace(fullName))
+        {
+            return "Verified patient";
+        }
+
+        var parts = fullName.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 1)
+        {
+            return parts[0];
+        }
+
+        var last = parts[^1];
+        return $"{parts[0]} {char.ToUpperInvariant(last[0])}.";
     }
 
     private static int NormalizePage(int page, int pageSize, out int skip)

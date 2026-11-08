@@ -37,12 +37,12 @@ public sealed class FavouriteService(IScheduleStore schedules, IClock clock)
         }
 
         await schedules.AddFavouriteAsync(DoctorFavourite.Create(userId, doctorId, clock.UtcNow), cancellationToken);
-        await schedules.SaveChangesAsync(cancellationToken);
+        await schedules.SaveChangesAsync(null, cancellationToken);
     }
 
     public async Task RemoveAsync(Guid userId, Guid doctorId, CancellationToken cancellationToken)
     {
         await schedules.RemoveFavouriteAsync(userId, doctorId, cancellationToken);
-        await schedules.SaveChangesAsync(cancellationToken);
+        await schedules.SaveChangesAsync(null, cancellationToken);
     }
 }

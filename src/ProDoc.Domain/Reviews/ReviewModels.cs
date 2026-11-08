@@ -40,7 +40,11 @@ public static class ReviewPolicy
 {
     public const int DefaultEditWindowHours = 48;
 
-    public const int MinimumReviewsForPublicAverage = 3;
+    /// <summary>
+    /// Public averages are shown as soon as at least one published review includes an overall rating.
+    /// Missing overall ratings never count as zero in the average.
+    /// </summary>
+    public const int MinimumReviewsForPublicAverage = 1;
 
     public const int MaxBodyLength = 2000;
 
@@ -79,7 +83,7 @@ public sealed class PatientReview
 
     public Guid? ClinicId { get; private set; }
 
-    public int OverallRating { get; private set; }
+    public int? OverallRating { get; private set; }
 
     public int? CommunicationRating { get; private set; }
 
@@ -88,6 +92,9 @@ public sealed class PatientReview
     public int? StaffBehaviourRating { get; private set; }
 
     public int? WaitingTimeRating { get; private set; }
+
+    /// <summary>Optional consultation-experience rating (doctor reviews).</summary>
+    public int? ConsultationRating { get; private set; }
 
     public string? Body { get; private set; }
 
@@ -113,11 +120,12 @@ public sealed class PatientReview
         ReviewTargetKind targetKind,
         Guid? doctorId,
         Guid? clinicId,
-        int overallRating,
+        int? overallRating,
         int? communicationRating,
         int? cleanlinessRating,
         int? staffBehaviourRating,
         int? waitingTimeRating,
+        int? consultationRating,
         string? body,
         DateTimeOffset now)
     {
@@ -144,16 +152,26 @@ public sealed class PatientReview
             CreatedAtUtc = now,
             UpdatedAtUtc = now
         };
-        review.ApplyRatings(overallRating, communicationRating, cleanlinessRating, staffBehaviourRating, waitingTimeRating, body, now, isEdit: false);
+        review.ApplyRatings(
+            overallRating,
+            communicationRating,
+            cleanlinessRating,
+            staffBehaviourRating,
+            waitingTimeRating,
+            consultationRating,
+            body,
+            now,
+            isEdit: false);
         return review;
     }
 
     public void Edit(
-        int overallRating,
+        int? overallRating,
         int? communicationRating,
         int? cleanlinessRating,
         int? staffBehaviourRating,
         int? waitingTimeRating,
+        int? consultationRating,
         string? body,
         DateTimeOffset now,
         int editWindowHours)
@@ -168,7 +186,65 @@ public sealed class PatientReview
             throw DomainException.Validation("review_edit_closed", "The edit window for this review has closed.");
         }
 
-        ApplyRatings(overallRating, communicationRating, cleanlinessRating, staffBehaviourRating, waitingTimeRating, body, now, isEdit: true);
+        ApplyRatings(
+            overallRating,
+            communicationRating,
+            cleanlinessRating,
+            staffBehaviourRating,
+            waitingTimeRating,
+            consultationRating,
+            body,
+            now,
+            isEdit: true);
+    }
+
+    public void Withdraw(DateTimeOffset now, int editWindowHours)
+    {
+        if (Status == ReviewStatus.Removed)
+        {
+            return;
+        }
+
+        if (now > CreatedAtUtc.AddHours(Math.Max(1, editWindowHours)))
+        {
+            throw DomainException.Validation("review_edit_closed", "The edit window for this review has closed.");
+        }
+
+        Status = ReviewStatus.Removed;
+        UpdatedAtUtc = now;
+    }
+
+    /// <summary>
+    /// Re-publishes a withdrawn review for the same appointment target (preserves uniqueness).
+    /// </summary>
+    public void Republish(
+        int? overallRating,
+        int? communicationRating,
+        int? cleanlinessRating,
+        int? staffBehaviourRating,
+        int? waitingTimeRating,
+        int? consultationRating,
+        string? body,
+        DateTimeOffset now)
+    {
+        if (Status != ReviewStatus.Removed)
+        {
+            throw DomainException.Conflict("review_exists", "A verified review already exists for this appointment target.");
+        }
+
+        Status = ReviewStatus.Published;
+        ApplyRatings(
+            overallRating,
+            communicationRating,
+            cleanlinessRating,
+            staffBehaviourRating,
+            waitingTimeRating,
+            consultationRating,
+            body,
+            now,
+            isEdit: false);
+        CreatedAtUtc = now;
+        EditedAtUtc = null;
     }
 
     public void Moderate(ReviewStatus status, Guid moderatorUserId, string reason, DateTimeOffset now)
@@ -232,21 +308,37 @@ public sealed class PatientReview
     }
 
     private void ApplyRatings(
-        int overallRating,
+        int? overallRating,
         int? communicationRating,
         int? cleanlinessRating,
         int? staffBehaviourRating,
         int? waitingTimeRating,
+        int? consultationRating,
         string? body,
         DateTimeOffset now,
         bool isEdit)
     {
-        OverallRating = ReviewPolicy.ClampRating(overallRating, "rating_invalid");
+        OverallRating = OptionalRating(overallRating, "rating_invalid");
         CommunicationRating = OptionalRating(communicationRating, "communication_rating_invalid");
         CleanlinessRating = OptionalRating(cleanlinessRating, "cleanliness_rating_invalid");
         StaffBehaviourRating = OptionalRating(staffBehaviourRating, "staff_rating_invalid");
         WaitingTimeRating = OptionalRating(waitingTimeRating, "waiting_rating_invalid");
+        ConsultationRating = OptionalRating(consultationRating, "consultation_rating_invalid");
         Body = NormalizeBody(body);
+
+        var hasRating = OverallRating is not null
+            || CommunicationRating is not null
+            || CleanlinessRating is not null
+            || StaffBehaviourRating is not null
+            || WaitingTimeRating is not null
+            || ConsultationRating is not null;
+        if (!hasRating && Body is null)
+        {
+            throw DomainException.Validation(
+                "review_empty",
+                "Add at least one star rating or a written comment before submitting.");
+        }
+
         UpdatedAtUtc = now;
         if (isEdit)
         {

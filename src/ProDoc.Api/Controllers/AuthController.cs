@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using ProDoc.Api.Auth;
 using ProDoc.Api.Contracts;
+using ProDoc.Api.Errors;
 using ProDoc.Application.Auth;
 
 namespace ProDoc.Api.Controllers;
@@ -20,23 +21,47 @@ public sealed class AuthController(AuthService authService) : ControllerBase
         RequestOtpRequest request,
         CancellationToken cancellationToken)
     {
-        var result = await authService.RequestOtpAsync(
-            new RequestOtpCommand(request.PhoneNumber, ClientAddress(), ClientAgent()),
+        var outcome = await authService.RequestOtpAsync(
+            new RequestOtpCommand(request.PhoneNumber, ClientAddress(), ClientAgent(), request.Purpose),
             cancellationToken);
-        return Ok(new OtpRequestedResponse(result.ChallengeId, result.ExpiresAtUtc, result.DevelopmentCode));
+
+        if (!outcome.Succeeded || outcome.Dispatch is null)
+        {
+            return DomainProblemResults.FromAuthFailure(
+                outcome.Failure ?? new AuthFailure("otp_request_failed", "Unable to send a code. Please try again.", 400));
+        }
+
+        var result = outcome.Dispatch;
+        return Ok(new OtpRequestedResponse(result.ChallengeId, result.ExpiresAtUtc, result.DevelopmentCode, result.Purpose));
     }
 
     [HttpPost("otp/verify")]
     [ProducesResponseType<AuthSessionResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status429TooManyRequests)]
     public async Task<ActionResult<AuthSessionResponse>> VerifyOtp(
         VerifyOtpRequest request,
         CancellationToken cancellationToken)
     {
-        var session = await authService.VerifyOtpAsync(
-            new VerifyOtpCommand(request.PhoneNumber, request.Code, request.DeviceName, ClientAddress(), ClientAgent(), request.ReferralCode),
+        var outcome = await authService.VerifyOtpAsync(
+            new VerifyOtpCommand(
+                request.PhoneNumber,
+                request.Code,
+                request.DeviceName,
+                ClientAddress(),
+                ClientAgent(),
+                request.ReferralCode,
+                request.Purpose),
             cancellationToken);
-        return Ok(AuthSessionResponse.From(session));
+
+        if (!outcome.Succeeded || outcome.Session is null)
+        {
+            return DomainProblemResults.FromAuthFailure(
+                outcome.Failure ?? new AuthFailure("otp_invalid", "Incorrect OTP. Please try again.", 400));
+        }
+
+        return Ok(AuthSessionResponse.From(outcome.Session));
     }
 
     [HttpPost("refresh")]
@@ -46,10 +71,17 @@ public sealed class AuthController(AuthService authService) : ControllerBase
         RefreshSessionRequest request,
         CancellationToken cancellationToken)
     {
-        var session = await authService.RefreshAsync(
+        var outcome = await authService.RefreshAsync(
             new RefreshSessionCommand(request.RefreshToken, ClientAddress(), ClientAgent()),
             cancellationToken);
-        return Ok(AuthSessionResponse.From(session));
+
+        if (!outcome.Succeeded || outcome.Session is null)
+        {
+            return DomainProblemResults.FromAuthFailure(
+                outcome.Failure ?? new AuthFailure("refresh_invalid", "The session is no longer valid. Sign in again.", 401));
+        }
+
+        return Ok(AuthSessionResponse.From(outcome.Session));
     }
 
     [HttpPost("logout")]

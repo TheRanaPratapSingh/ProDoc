@@ -20,9 +20,21 @@ public interface IReviewStore
 
     Task<string?> FindClinicNameAsync(Guid clinicId, CancellationToken cancellationToken);
 
+    Task<string?> FindAppointmentPatientNameAsync(Guid appointmentId, CancellationToken cancellationToken);
+
+    Task<DateTimeOffset?> FindAppointmentCompletedAtAsync(Guid appointmentId, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<PatientReview>> ListForAuthorAsync(Guid authorUserId, int take, CancellationToken cancellationToken);
+
     Task<PatientReview?> FindReviewAsync(Guid reviewId, bool tracking, CancellationToken cancellationToken);
 
     Task<PatientReview?> FindReviewByAppointmentTargetAsync(Guid appointmentId, ReviewTargetKind targetKind, CancellationToken cancellationToken);
+
+    Task<PatientReview?> FindAnyReviewByAppointmentTargetAsync(
+        Guid appointmentId,
+        ReviewTargetKind targetKind,
+        bool tracking,
+        CancellationToken cancellationToken);
 
     Task<IReadOnlyList<PatientReview>> ListPublishedForDoctorAsync(Guid doctorId, int skip, int take, CancellationToken cancellationToken);
 

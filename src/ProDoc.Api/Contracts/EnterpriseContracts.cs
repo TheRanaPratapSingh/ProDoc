@@ -1,4 +1,5 @@
 using FluentValidation;
+using ProDoc.Api.Validation;
 
 namespace ProDoc.Api.Contracts;
 
@@ -23,7 +24,7 @@ public sealed class InviteOrgMemberRequestValidator : AbstractValidator<InviteOr
 {
     public InviteOrgMemberRequestValidator()
     {
-        RuleFor(request => request.PhoneNumber).NotEmpty().MaximumLength(20);
+        RuleFor(request => request.PhoneNumber).NotEmpty().MaximumLength(20).MustBeIndianMobile();
         RuleFor(request => request.Role).NotEmpty();
     }
 }

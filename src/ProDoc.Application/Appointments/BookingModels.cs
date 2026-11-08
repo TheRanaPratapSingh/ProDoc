@@ -6,8 +6,12 @@ public sealed record AppointmentDetails(
     string Status,
     string PatientName,
     Guid? FamilyMemberId,
+    Guid? AccountUserId,
     Guid DoctorId,
     string DoctorName,
+    string? DoctorSpecialization,
+    bool DoctorVerified,
+    Guid ScheduleId,
     Guid ClinicId,
     string ClinicName,
     Guid BranchId,
@@ -15,6 +19,10 @@ public sealed record AppointmentDetails(
     string Address,
     decimal? Latitude,
     decimal? Longitude,
+    string? GooglePlaceId,
+    string? MapsUrl,
+    string? DirectionsUrl,
+    bool LocationVerified,
     DateTimeOffset StartsAtUtc,
     DateTimeOffset EndsAtUtc,
     string TimeZoneId,
@@ -29,7 +37,12 @@ public sealed record AppointmentDetails(
     string? Reason,
     string? Notes,
     string? DecisionNote,
-    string CancellationPolicy);
+    string CancellationPolicy,
+    string? TokenLabel,
+    int? TokenNumber,
+    string BookingMode,
+    int SameDayRescheduleCount,
+    bool CanSameDayReschedule);
 
 public sealed record AppointmentSummary(
     Guid Id,

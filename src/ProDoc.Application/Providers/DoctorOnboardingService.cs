@@ -39,9 +39,23 @@ public sealed class DoctorOnboardingService(
         string? gender,
         string? email,
         string preferredLanguage,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowCreate = false)
     {
-        var doctor = await EditableDoctorAsync(userId, preferredLanguage, cancellationToken);
+        var doctor = await store.FindDoctorByUserIdAsync(userId, tracking: true, cancellationToken);
+        if (doctor is null)
+        {
+            if (!allowCreate)
+            {
+                throw DomainException.Forbidden(
+                    "doctor_create_denied",
+                    "Only an authorized Super Admin can create a new doctor profile.");
+            }
+
+            doctor = Doctor.Begin(userId, preferredLanguage, clock.UtcNow);
+            await store.AddDoctorAsync(doctor, cancellationToken);
+        }
+
         doctor.UpdateBasics(firstName, lastName, dateOfBirth, gender, email, preferredLanguage, clock.UtcNow);
         await store.SaveChangesAsync(cancellationToken);
         return await MapAsync(doctor, userId, false, cancellationToken);
@@ -51,7 +65,7 @@ public sealed class DoctorOnboardingService(
         Guid userId,
         string? displayName,
         string? biography,
-        int? yearsOfExperience,
+        int yearsOfExperience,
         IReadOnlyList<string>? languages,
         IReadOnlyList<string>? expertise,
         CancellationToken cancellationToken)
@@ -215,15 +229,16 @@ public sealed class DoctorOnboardingService(
 
     private async Task<Doctor> EditableDoctorAsync(Guid userId, string preferredLanguage, CancellationToken cancellationToken)
     {
+        _ = preferredLanguage;
         var doctor = await store.FindDoctorByUserIdAsync(userId, tracking: true, cancellationToken);
         if (doctor is not null)
         {
             return doctor;
         }
 
-        doctor = Doctor.Begin(userId, preferredLanguage, clock.UtcNow);
-        await store.AddDoctorAsync(doctor, cancellationToken);
-        return doctor;
+        throw DomainException.NotFound(
+            "doctor_not_found",
+            "Start a doctor profile first. Only Super Admin can create new doctor profiles.");
     }
 
     private async Task<DoctorProfile> MapAsync(

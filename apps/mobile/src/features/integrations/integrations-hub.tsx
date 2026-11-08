@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { View } from 'react-native';
 
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AppText } from '@/components/ui/text';
@@ -23,7 +24,7 @@ import {
   revokeIntegrationConsent,
   simulateAbhaSandbox,
 } from '@/services/api/integrations-api';
-import { useSessionStore } from '@/stores/session-store';
+import { useAccountPermissions } from '@/stores/session-store';
 import { useProdocTheme } from '@/theme/prodoc-theme';
 import { spacing } from '@/theme/tokens';
 import { problemMessage } from '@/utils/problem';
@@ -39,7 +40,7 @@ export function IntegrationsHub() {
   const copy = useCopy();
   const theme = useProdocTheme();
   const queryClient = useQueryClient();
-  const permissions = useSessionStore((state) => state.account?.permissions ?? []);
+  const permissions = useAccountPermissions();
   const canUse = permissions.includes('integrations.use');
   const canManage = permissions.includes('integrations.manage');
   const [error, setError] = useState<string | null>(null);
@@ -166,7 +167,7 @@ export function IntegrationsHub() {
   if (!canUse) {
     return (
       <AuthScaffold>
-        <AppText variant="title">{copy.integrationsTitle}</AppText>
+        <ScreenHeader title={copy.integrationsTitle} showBack />
         <AppText variant="muted">{copy.integrationsNoAccess}</AppText>
       </AuthScaffold>
     );
@@ -175,7 +176,7 @@ export function IntegrationsHub() {
   return (
     <AuthScaffold>
       <View style={{ gap: spacing.md }}>
-        <AppText variant="title">{copy.integrationsTitle}</AppText>
+        <ScreenHeader title={copy.integrationsTitle} showBack />
         <AppText variant="muted">{copy.integrationsBody}</AppText>
         {error ? <AppText style={{ color: theme.colors.error }}>{error}</AppText> : null}
 

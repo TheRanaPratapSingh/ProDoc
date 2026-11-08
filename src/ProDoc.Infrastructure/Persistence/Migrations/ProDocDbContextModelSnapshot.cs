@@ -282,6 +282,11 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<string>("CreatedByRole")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
                     b.Property<Guid>("CreatedByUserId")
                         .HasColumnType("uniqueidentifier");
 
@@ -295,6 +300,11 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("EscalatedAtUtc")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("IssueType")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
 
                     b.Property<string>("Number")
                         .IsRequired()
@@ -385,11 +395,19 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset?>("ApprovalDeadlineUtc")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<int>("BookingMode")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
                     b.Property<Guid>("BranchId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("ClinicId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateOnly>("ClinicLocalDate")
+                        .HasColumnType("date");
 
                     b.Property<decimal>("ConsultationFee")
                         .HasPrecision(10, 2)
@@ -421,6 +439,30 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
 
                     b.Property<bool>("IsWalkIn")
                         .HasColumnType("bit");
+
+                    b.Property<string>("LocationAddress")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("LocationBranchName")
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<string>("LocationClinicName")
+                        .HasMaxLength(160)
+                        .HasColumnType("nvarchar(160)");
+
+                    b.Property<string>("LocationGooglePlaceId")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<decimal?>("LocationLatitude")
+                        .HasPrecision(9, 6)
+                        .HasColumnType("decimal(9,6)");
+
+                    b.Property<decimal?>("LocationLongitude")
+                        .HasPrecision(9, 6)
+                        .HasColumnType("decimal(9,6)");
 
                     b.Property<string>("Notes")
                         .HasMaxLength(500)
@@ -462,6 +504,9 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
 
+                    b.Property<int>("SameDayRescheduleCount")
+                        .HasColumnType("int");
+
                     b.Property<Guid>("ScheduleId")
                         .HasColumnType("uniqueidentifier");
 
@@ -476,6 +521,13 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
+                    b.Property<string>("TokenLabel")
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<int?>("TokenNumber")
+                        .HasColumnType("int");
+
                     b.Property<DateTimeOffset>("UpdatedAtUtc")
                         .HasColumnType("datetimeoffset");
 
@@ -484,8 +536,6 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.HasIndex("AccountUserId");
 
                     b.HasIndex("BranchId");
-
-                    b.HasIndex("ClinicId");
 
                     b.HasIndex("FamilyMemberId");
 
@@ -497,11 +547,67 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("DoctorId", "StartsAtUtc");
 
+                    b.HasIndex("AccountUserId", "DoctorId", "ClinicLocalDate")
+                        .IsUnique()
+                        .HasDatabaseName("IX_Appointments_AccountUserId_DoctorId_ClinicLocalDate")
+                        .HasFilter("[Status] IN (1, 2, 3, 7)");
+
                     b.HasIndex("DoctorId", "BranchId", "StartsAtUtc")
                         .IsUnique()
-                        .HasFilter("[Status] IN (1, 2, 3, 7, 8)");
+                        .HasDatabaseName("IX_Appointments_DoctorId_BranchId_StartsAtUtc_Timed")
+                        .HasFilter("[Status] IN (1, 2, 3, 7, 8) AND [BookingMode] = 0");
+
+                    b.HasIndex("DoctorId", "BranchId", "StartsAtUtc", "TokenLabel")
+                        .IsUnique()
+                        .HasDatabaseName("IX_Appointments_HourlyToken")
+                        .HasFilter("[Status] IN (2, 3, 7, 8) AND [BookingMode] = 1 AND [TokenLabel] IS NOT NULL");
+
+                    b.HasIndex("ClinicId", "BranchId", "DoctorId", "TokenLabel", "StartsAtUtc");
 
                     b.ToTable("Appointments", (string)null);
+                });
+
+            modelBuilder.Entity("ProDoc.Domain.Appointments.AppointmentShareLink", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("AccessCount")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("AppointmentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("ExpiresAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("LastAccessedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("RevokedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AppointmentId");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("CreatedByUserId", "CreatedAtUtc");
+
+                    b.ToTable("AppointmentShareLinks", (string)null);
                 });
 
             modelBuilder.Entity("ProDoc.Domain.Appointments.FamilyMember", b =>
@@ -1631,6 +1737,50 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.ToTable("ConsultationRecords", (string)null);
                 });
 
+            modelBuilder.Entity("ProDoc.Domain.Clinical.FollowUpReminder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<int>("DeliveryStatus")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("FollowUpId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("nvarchar(160)");
+
+                    b.Property<int>("ReminderType")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset>("ScheduledAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("SentAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("SkipReason")
+                        .HasMaxLength(240)
+                        .HasColumnType("nvarchar(240)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("DeliveryStatus", "ScheduledAtUtc");
+
+                    b.HasIndex("FollowUpId", "ScheduledAtUtc");
+
+                    b.ToTable("FollowUpReminders", (string)null);
+                });
+
             modelBuilder.Entity("ProDoc.Domain.Clinical.MedicalDocument", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1800,6 +1950,90 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.HasIndex("MedicalRecordId");
 
                     b.ToTable("PatientAllergies", (string)null);
+                });
+
+            modelBuilder.Entity("ProDoc.Domain.Clinical.PatientFollowUp", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("CancelledAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("ClinicId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("CompletedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("DoctorId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("FamilyMemberId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("FollowUpNote")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<Guid?>("LinkedAppointmentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("PatientName")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<Guid>("PatientUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateOnly>("RecommendedDate")
+                        .HasColumnType("date");
+
+                    b.Property<bool>("RequiresBooking")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid?>("SourceAppointmentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("SourceConsultationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<string>("TimeZoneId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LinkedAppointmentId");
+
+                    b.HasIndex("SourceAppointmentId");
+
+                    b.HasIndex("SourceConsultationId");
+
+                    b.HasIndex("ClinicId", "RecommendedDate");
+
+                    b.HasIndex("DoctorId", "RecommendedDate");
+
+                    b.HasIndex("PatientUserId", "RecommendedDate");
+
+                    b.ToTable("PatientFollowUps", (string)null);
                 });
 
             modelBuilder.Entity("ProDoc.Domain.Clinical.PatientMedicalCondition", b =>
@@ -2913,6 +3147,70 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.ToTable("RefreshTokens", (string)null);
                 });
 
+            modelBuilder.Entity("ProDoc.Domain.Identity.StaffInvitation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("AcceptedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("AcceptedUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("BranchId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ClinicId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTimeOffset>("ExpiresAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<Guid>("InvitedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("PayloadJson")
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<string>("PhoneE164")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("RoleName")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpiresAtUtc");
+
+                    b.HasIndex("PhoneE164", "Status");
+
+                    b.ToTable("StaffInvitations", (string)null);
+                });
+
             modelBuilder.Entity("ProDoc.Domain.Integrations.AbhaLink", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3667,6 +3965,9 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int?>("AgeYears")
+                        .HasColumnType("int");
+
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("datetimeoffset");
 
@@ -3677,10 +3978,19 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                         .HasMaxLength(80)
                         .HasColumnType("nvarchar(80)");
 
+                    b.Property<string>("Gender")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
                     b.Property<string>("PreferredLanguage")
                         .IsRequired()
                         .HasMaxLength(8)
                         .HasColumnType("nvarchar(8)");
+
+                    b.Property<bool>("ProfileCompleted")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
@@ -3695,6 +4005,8 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ProfileCompleted");
 
                     b.HasIndex("UserId")
                         .IsUnique();
@@ -3824,15 +4136,41 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("ClinicId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("Country")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)")
+                        .HasDefaultValue("India");
+
+                    b.Property<string>("District")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<string>("GooglePlaceId")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
 
                     b.Property<bool>("IsPrimary")
                         .HasColumnType("bit");
 
+                    b.Property<string>("Landmark")
+                        .HasMaxLength(160)
+                        .HasColumnType("nvarchar(160)");
+
                     b.Property<decimal?>("Latitude")
                         .HasPrecision(9, 6)
                         .HasColumnType("decimal(9,6)");
+
+                    b.Property<string>("Locality")
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<DateTimeOffset?>("LocationUpdatedAtUtc")
+                        .HasColumnType("datetimeoffset");
 
                     b.Property<decimal?>("Longitude")
                         .HasPrecision(9, 6)
@@ -3862,6 +4200,8 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.HasIndex("City");
 
                     b.HasIndex("ClinicId");
+
+                    b.HasIndex("Locality");
 
                     b.HasIndex("PostalCode");
 
@@ -3981,7 +4321,7 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("UserId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<int?>("YearsOfExperience")
+                    b.Property<int>("YearsOfExperience")
                         .HasColumnType("int");
 
                     b.HasKey("Id");
@@ -4019,6 +4359,57 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
 
                     b.Property<int>("Kind")
                         .HasColumnType("int");
+
+                    b.Property<string>("PracticeAddressLine")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("PracticeAddressLine2")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("PracticeCity")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<string>("PracticeCountry")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<string>("PracticeDistrict")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<string>("PracticeGooglePlaceId")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("PracticeLandmark")
+                        .HasMaxLength(160)
+                        .HasColumnType("nvarchar(160)");
+
+                    b.Property<decimal?>("PracticeLatitude")
+                        .HasPrecision(9, 6)
+                        .HasColumnType("decimal(9,6)");
+
+                    b.Property<string>("PracticeLocality")
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<DateTimeOffset?>("PracticeLocationUpdatedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<decimal?>("PracticeLongitude")
+                        .HasPrecision(9, 6)
+                        .HasColumnType("decimal(9,6)");
+
+                    b.Property<string>("PracticePostalCode")
+                        .HasMaxLength(6)
+                        .HasColumnType("nvarchar(6)");
+
+                    b.Property<string>("PracticeState")
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
 
                     b.HasKey("Id");
 
@@ -4226,6 +4617,40 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.HasIndex("DoctorId", "Category", "IsCurrent");
 
                     b.ToTable("ProviderDocuments", (string)null);
+                });
+
+            modelBuilder.Entity("ProDoc.Domain.Providers.ReceptionistDoctorAssignment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("ClinicId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("DoctorId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid>("ReceptionistUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("UpdatedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClinicId", "ReceptionistUserId", "DoctorId")
+                        .IsUnique();
+
+                    b.HasIndex("ReceptionistUserId", "ClinicId", "IsActive");
+
+                    b.ToTable("ReceptionistDoctorAssignments", (string)null);
                 });
 
             modelBuilder.Entity("ProDoc.Domain.Providers.Specialization", b =>
@@ -4535,6 +4960,11 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.Property<DateOnly>("OperatingDate")
                         .HasColumnType("date");
 
+                    b.Property<int>("RangeStartMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(-1);
+
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
                         .IsRequired()
@@ -4543,8 +4973,9 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ClinicId", "BranchId", "DoctorId", "OperatingDate")
-                        .IsUnique();
+                    b.HasIndex("ClinicId", "BranchId", "DoctorId", "OperatingDate", "RangeStartMinutes")
+                        .IsUnique()
+                        .HasDatabaseName("IX_QueueTokenCounters_Clinic_Branch_Doctor_Date_Range");
 
                     b.ToTable("QueueTokenCounters", (string)null);
                 });
@@ -4556,8 +4987,8 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("Body")
                         .IsRequired()
-                        .HasMaxLength(280)
-                        .HasColumnType("nvarchar(280)");
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
 
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("datetimeoffset");
@@ -4701,6 +5132,9 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.Property<int?>("CommunicationRating")
                         .HasColumnType("int");
 
+                    b.Property<int?>("ConsultationRating")
+                        .HasColumnType("int");
+
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("datetimeoffset");
 
@@ -4713,7 +5147,7 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.Property<bool>("IsVerifiedVisit")
                         .HasColumnType("bit");
 
-                    b.Property<int>("OverallRating")
+                    b.Property<int?>("OverallRating")
                         .HasColumnType("int");
 
                     b.Property<int?>("StaffBehaviourRating")
@@ -5207,6 +5641,11 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int>("BookingMode")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
                     b.Property<Guid?>("BranchId")
                         .HasColumnType("uniqueidentifier");
 
@@ -5569,6 +6008,33 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.ToTable("HelpArticleCategories", (string)null);
                 });
 
+            modelBuilder.Entity("ProDoc.Domain.Support.HelpArticleFeedback", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("ArticleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("WasHelpful")
+                        .HasColumnType("bit");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ArticleId");
+
+                    b.HasIndex("ArticleId", "UserId");
+
+                    b.ToTable("HelpArticleFeedback", (string)null);
+                });
+
             modelBuilder.Entity("ProDoc.Domain.Support.SupportAttachment", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5688,6 +6154,9 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                     b.Property<string>("PasswordHash")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<DateTimeOffset?>("PermanentlyDeletedAtUtc")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<string>("PhoneNumber")
                         .HasColumnType("nvarchar(max)");
 
@@ -5720,6 +6189,8 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                         .IsUnique()
                         .HasDatabaseName("UserNameIndex")
                         .HasFilter("[NormalizedUserName] IS NOT NULL");
+
+                    b.HasIndex("PermanentlyDeletedAtUtc");
 
                     b.ToTable("Users", (string)null);
                 });
@@ -5831,6 +6302,15 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("ProDoc.Domain.Appointments.AppointmentShareLink", b =>
+                {
+                    b.HasOne("ProDoc.Domain.Appointments.Appointment", null)
+                        .WithMany()
+                        .HasForeignKey("AppointmentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("ProDoc.Domain.Assistant.AssistantMessage", b =>
                 {
                     b.HasOne("ProDoc.Domain.Assistant.AssistantConversation", null)
@@ -5876,6 +6356,15 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("ProDoc.Domain.Clinical.FollowUpReminder", b =>
+                {
+                    b.HasOne("ProDoc.Domain.Clinical.PatientFollowUp", null)
+                        .WithMany()
+                        .HasForeignKey("FollowUpId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("ProDoc.Domain.Clinical.MedicalDocument", b =>
                 {
                     b.HasOne("ProDoc.Domain.Clinical.PatientMedicalRecord", null)
@@ -5892,6 +6381,36 @@ namespace ProDoc.Infrastructure.Persistence.Migrations
                         .HasForeignKey("MedicalRecordId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("ProDoc.Domain.Clinical.PatientFollowUp", b =>
+                {
+                    b.HasOne("ProDoc.Domain.Providers.Clinic", null)
+                        .WithMany()
+                        .HasForeignKey("ClinicId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("ProDoc.Domain.Providers.Doctor", null)
+                        .WithMany()
+                        .HasForeignKey("DoctorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("ProDoc.Domain.Appointments.Appointment", null)
+                        .WithMany()
+                        .HasForeignKey("LinkedAppointmentId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("ProDoc.Domain.Appointments.Appointment", null)
+                        .WithMany()
+                        .HasForeignKey("SourceAppointmentId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("ProDoc.Domain.Clinical.ConsultationRecord", null)
+                        .WithMany()
+                        .HasForeignKey("SourceConsultationId")
+                        .OnDelete(DeleteBehavior.NoAction);
                 });
 
             modelBuilder.Entity("ProDoc.Domain.Clinical.PatientMedicalCondition", b =>

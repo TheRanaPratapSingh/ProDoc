@@ -15,7 +15,7 @@ public sealed class SupportFlowTests(ProDocApiFactory factory)
     public async Task Help_center_tickets_internal_notes_and_disputes_are_secured()
     {
         var patient = await SignInAsync("9000000161");
-        var admin = await SignInAsync("9000000001");
+        var admin = await SignInAsync("9000000001", purpose: "admin");
         await SendAsync(HttpMethod.Put, "/api/v1/account/profile", patient.AccessToken, JsonContent.Create(new
         {
             fullName = "Support Patient",
@@ -29,15 +29,24 @@ public sealed class SupportFlowTests(ProDocApiFactory factory)
         var article = await ReadAsync(await _client.GetAsync("/api/v1/help/articles/how-to-book"));
         Assert.Contains("book", article.GetProperty("titleEn").GetString()!, StringComparison.OrdinalIgnoreCase);
 
+        var feedback = await ReadAsync(await _client.PostAsJsonAsync("/api/v1/help/articles/how-to-book/feedback", new { wasHelpful = true }));
+        Assert.True(feedback.GetProperty("wasHelpful").GetBoolean());
+
+        var catalog = await ReadAsync(await SendAsync(HttpMethod.Get, "/api/v1/support/catalog", patient.AccessToken));
+        Assert.True(catalog.GetProperty("topics").GetArrayLength() >= 4);
+
         var ticket = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/support/tickets", patient.AccessToken, JsonContent.Create(new
         {
             category = "PaymentIssue",
             priority = "High",
             subject = "Payment not reflecting",
-            description = "I paid online but the visit still shows unpaid."
+            description = "I paid online but the visit still shows unpaid.",
+            issueType = "payment_failed",
+            createdByRole = "Patient"
         })));
         var ticketId = ticket.GetProperty("id").GetGuid();
-        Assert.StartsWith("TCK", ticket.GetProperty("number").GetString());
+        Assert.StartsWith("PRODOC-", ticket.GetProperty("number").GetString());
+        Assert.Equal("payment_failed", ticket.GetProperty("issueType").GetString());
 
         using var upload = new MultipartFormDataContent();
         var fileContent = new ByteArrayContent(Encoding.UTF8.GetBytes("receipt-proof"));
@@ -88,9 +97,9 @@ public sealed class SupportFlowTests(ProDocApiFactory factory)
         Assert.True(analytics.GetProperty("openTickets").GetInt32() >= 1);
     }
 
-    private async Task<SessionBody> SignInAsync(string phone)
+    private async Task<SessionBody> SignInAsync(string phone, string? purpose = null)
     {
-        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone });
+        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone, purpose });
         var otpBody = await otpResponse.Content.ReadAsStringAsync();
         Assert.True(otpResponse.IsSuccessStatusCode, otpBody);
         var otp = JsonSerializer.Deserialize<OtpBody>(otpBody, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -98,7 +107,8 @@ public sealed class SupportFlowTests(ProDocApiFactory factory)
         {
             phoneNumber = phone,
             code = otp!.DevelopmentCode,
-            deviceName = "support-test"
+            deviceName = "support-test",
+            purpose
         });
         var verifyBody = await verifyResponse.Content.ReadAsStringAsync();
         Assert.True(verifyResponse.IsSuccessStatusCode, verifyBody);

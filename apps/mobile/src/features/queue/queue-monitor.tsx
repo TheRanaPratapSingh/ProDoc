@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
 
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AppText } from '@/components/ui/text';
@@ -17,15 +17,13 @@ function day(offset = 0) {
 
 export function QueueMonitor() {
   const copy = useCopy();
-  const router = useRouter();
   const from = day(0);
   const to = day(0);
   const rows = useQuery({ queryKey: ['admin', 'queues', from], queryFn: () => listAdminQueues(from, to) });
 
   return (
     <AuthScaffold>
-      <Button label={copy.back} variant="secondary" onPress={() => router.back()} />
-      <AppText variant="title">{copy.queueMonitor}</AppText>
+      <ScreenHeader title={copy.queueMonitor} />
       {(rows.data ?? []).map((row, index) => (
         <Card key={`${row.clinicName}-${row.doctorName}-${index}`}>
           <AppText>

@@ -1,24 +1,23 @@
 import { useQuery } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
 import { useState } from 'react';
 
+import { View } from 'react-native';
+
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import { DashboardStatCard } from '@/components/ui/stat-card';
 import { AppText } from '@/components/ui/text';
 import { useCopy } from '@/i18n/copy';
 import { getAdminFinance, getClinicFinance } from '@/services/api/billing-api';
 import { listDeskClinics } from '@/services/api/queue-api';
-import { useSessionStore } from '@/stores/session-store';
+import { useAccountPermissions } from '@/stores/session-store';
 import { spacing } from '@/theme/tokens';
 import { problemMessage } from '@/utils/problem';
-import { View } from 'react-native';
 
 export function FinanceDashboardScreen() {
   const copy = useCopy();
-  const router = useRouter();
-  const permissions = useSessionStore((state) => state.account?.permissions ?? []);
+  const permissions = useAccountPermissions();
   const isAdmin = permissions.includes('commissions.manage') || permissions.includes('admin.access');
   const clinics = useQuery({ queryKey: ['clinics', 'desk'], queryFn: listDeskClinics, enabled: !isAdmin });
   const [clinicId, setClinicId] = useState('');
@@ -37,8 +36,7 @@ export function FinanceDashboardScreen() {
 
   return (
     <AuthScaffold>
-      <Button label={copy.back} variant="ghost" onPress={() => router.back()} />
-      <AppText variant="title">{copy.financeDashboard}</AppText>
+      <ScreenHeader title={copy.financeDashboard} />
       {isAdmin && adminFinance.data ? (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
           <DashboardStatCard label={copy.grossBookings} value={`₹${adminFinance.data.grossPlatformBookingValue.toFixed(0)}`} />
@@ -60,26 +58,14 @@ export function FinanceDashboardScreen() {
             />
           ))}
           {clinicFinance.data ? (
-            <Card>
-              <AppText>
-                {copy.grossBookings}: ₹{clinicFinance.data.grossEligibleFees.toFixed(2)}
-              </AppText>
-              <AppText>
-                {copy.onlineCollected}: ₹{clinicFinance.data.onlineCollected.toFixed(2)}
-              </AppText>
-              <AppText>
-                {copy.payAtClinic}: ₹{clinicFinance.data.payAtClinicCollected.toFixed(2)}
-              </AppText>
-              <AppText>
-                {copy.commissionEarned}: ₹{clinicFinance.data.commissionDeducted.toFixed(2)}
-              </AppText>
-              <AppText>
-                {copy.pendingPayables}: ₹{clinicFinance.data.pendingSettlement.toFixed(2)}
-              </AppText>
-              <AppText>
-                {copy.netPayable}: ₹{clinicFinance.data.netPayable.toFixed(2)}
-              </AppText>
-            </Card>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md }}>
+              <DashboardStatCard label={copy.grossBookings} value={`₹${clinicFinance.data.grossEligibleFees.toFixed(0)}`} />
+              <DashboardStatCard label={copy.onlineCollected} value={`₹${clinicFinance.data.onlineCollected.toFixed(0)}`} />
+              <DashboardStatCard label={copy.payAtClinic} value={`₹${clinicFinance.data.payAtClinicCollected.toFixed(0)}`} />
+              <DashboardStatCard label={copy.commissionEarned} value={`₹${clinicFinance.data.commissionDeducted.toFixed(0)}`} />
+              <DashboardStatCard label={copy.pendingPayables} value={`₹${clinicFinance.data.pendingSettlement.toFixed(0)}`} />
+              <DashboardStatCard label={copy.netPayable} value={`₹${clinicFinance.data.netPayable.toFixed(0)}`} />
+            </View>
           ) : null}
         </>
       ) : null}

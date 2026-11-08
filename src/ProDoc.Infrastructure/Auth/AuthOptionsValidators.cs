@@ -82,6 +82,23 @@ public sealed class SessionOptionsValidator(IHostEnvironment environment) : IVal
             return ValidateOptionsResult.Fail("Auth:DevelopmentAdminPhones must be empty outside Development.");
         }
 
+        foreach (var phone in options.SuperAdminPhones.Concat(options.DevelopmentAdminPhones))
+        {
+            if (string.IsNullOrWhiteSpace(phone))
+            {
+                return ValidateOptionsResult.Fail("Auth Super Admin phone entries cannot be blank.");
+            }
+
+            try
+            {
+                _ = Domain.Identity.PhoneNumber.ParseIndianMobile(phone);
+            }
+            catch (Domain.Common.DomainException)
+            {
+                return ValidateOptionsResult.Fail($"Auth Super Admin phone '{phone}' is not a valid Indian mobile number.");
+            }
+        }
+
         return ValidateOptionsResult.Success;
     }
 }

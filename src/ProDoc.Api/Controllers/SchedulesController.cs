@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ProDoc.Api.Auth;
 using ProDoc.Api.Contracts;
+using ProDoc.Api.Errors;
+using ProDoc.Application.Providers;
 using ProDoc.Application.Scheduling;
 using ProDoc.Domain.Common;
 using ProDoc.Domain.Identity;
@@ -41,6 +43,7 @@ public sealed class SchedulesController(ScheduleService schedules) : ControllerB
             request.ConsultationFee,
             request.SlotDurationMinutes,
             request.BufferMinutes,
+            Meta(),
             cancellationToken));
     }
 
@@ -64,7 +67,11 @@ public sealed class SchedulesController(ScheduleService schedules) : ControllerB
             request.EffectiveTo,
             request.TimeZoneId,
             request.RequiresApproval,
-            cancellationToken));
+            request.ExpectedRowVersion,
+            Meta(),
+            cancellationToken,
+            request.BookingMode,
+            request.ConfirmBookingModeChange));
     }
 
     [Authorize]
@@ -76,7 +83,13 @@ public sealed class SchedulesController(ScheduleService schedules) : ControllerB
             return Forbid();
         }
 
-        return Ok(await schedules.ReplaceHoursAsync(User.GetUserId(), scheduleId, ParsePeriods(request), cancellationToken));
+        return Ok(await schedules.ReplaceHoursAsync(
+            User.GetUserId(),
+            scheduleId,
+            ParsePeriods(request),
+            request.ExpectedRowVersion,
+            Meta(),
+            cancellationToken));
     }
 
     [Authorize]
@@ -88,7 +101,13 @@ public sealed class SchedulesController(ScheduleService schedules) : ControllerB
             return Forbid();
         }
 
-        return Ok(await schedules.ReplaceBreaksAsync(User.GetUserId(), scheduleId, ParsePeriods(request), cancellationToken));
+        return Ok(await schedules.ReplaceBreaksAsync(
+            User.GetUserId(),
+            scheduleId,
+            ParsePeriods(request),
+            request.ExpectedRowVersion,
+            Meta(),
+            cancellationToken));
     }
 
     [Authorize]
@@ -100,19 +119,36 @@ public sealed class SchedulesController(ScheduleService schedules) : ControllerB
             return Forbid();
         }
 
-        return Ok(await schedules.AddClosureAsync(User.GetUserId(), scheduleId, request.Date, request.Reason, cancellationToken));
+        return Ok(await schedules.AddClosureAsync(
+            User.GetUserId(),
+            scheduleId,
+            request.Date,
+            request.Reason,
+            request.ExpectedRowVersion,
+            Meta(),
+            cancellationToken));
     }
 
     [Authorize]
     [HttpDelete("{scheduleId:guid}/closures/{closureId:guid}")]
-    public async Task<ActionResult<ScheduleDetails>> Reopen(Guid scheduleId, Guid closureId, CancellationToken cancellationToken)
+    public async Task<ActionResult<ScheduleDetails>> Reopen(
+        Guid scheduleId,
+        Guid closureId,
+        [FromQuery] string? expectedRowVersion,
+        CancellationToken cancellationToken)
     {
         if (!CanManage())
         {
             return Forbid();
         }
 
-        return Ok(await schedules.RemoveClosureAsync(User.GetUserId(), scheduleId, closureId, cancellationToken));
+        return Ok(await schedules.RemoveClosureAsync(
+            User.GetUserId(),
+            scheduleId,
+            closureId,
+            expectedRowVersion,
+            Meta(),
+            cancellationToken));
     }
 
     [Authorize]
@@ -124,7 +160,13 @@ public sealed class SchedulesController(ScheduleService schedules) : ControllerB
             return Forbid();
         }
 
-        return Ok(await schedules.SetPublishedAsync(User.GetUserId(), scheduleId, request.IsPublished, cancellationToken));
+        return Ok(await schedules.SetPublishedAsync(
+            User.GetUserId(),
+            scheduleId,
+            request.IsPublished,
+            request.ExpectedRowVersion,
+            Meta(),
+            cancellationToken));
     }
 
     [Authorize]
@@ -136,41 +178,169 @@ public sealed class SchedulesController(ScheduleService schedules) : ControllerB
             return Forbid();
         }
 
-        return Ok(await schedules.AddExtraAsync(User.GetUserId(), scheduleId, request.Date, ParseTime(request.StartsAt), ParseTime(request.EndsAt), cancellationToken));
+        return Ok(await schedules.AddExtraAsync(
+            User.GetUserId(),
+            scheduleId,
+            request.Date,
+            ParseTime(request.StartsAt),
+            ParseTime(request.EndsAt),
+            request.ExpectedRowVersion,
+            Meta(),
+            cancellationToken));
     }
 
     [Authorize]
     [HttpDelete("{scheduleId:guid}/extras/{extraId:guid}")]
-    public async Task<ActionResult<ScheduleDetails>> RemoveExtra(Guid scheduleId, Guid extraId, CancellationToken cancellationToken)
+    public async Task<ActionResult<ScheduleDetails>> RemoveExtra(
+        Guid scheduleId,
+        Guid extraId,
+        [FromQuery] string? expectedRowVersion,
+        CancellationToken cancellationToken)
     {
         if (!CanManage())
         {
             return Forbid();
         }
 
-        return Ok(await schedules.RemoveExtraAsync(User.GetUserId(), scheduleId, extraId, cancellationToken));
+        return Ok(await schedules.RemoveExtraAsync(
+            User.GetUserId(),
+            scheduleId,
+            extraId,
+            expectedRowVersion,
+            Meta(),
+            cancellationToken));
+    }
+
+    [Authorize]
+    [HttpPut("{scheduleId:guid}/day-override")]
+    public async Task<ActionResult<ScheduleDetails>> ReplaceDayOverride(
+        Guid scheduleId,
+        ReplaceDayOverrideRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!CanManage())
+        {
+            return Forbid();
+        }
+
+        var windows = request.Windows
+            .Select(window => (ParseTime(window.StartsAt), ParseTime(window.EndsAt)))
+            .ToArray();
+        return Ok(await schedules.ReplaceDayOverrideAsync(
+            User.GetUserId(),
+            scheduleId,
+            request.Date,
+            windows,
+            request.Available,
+            request.UnavailableReason,
+            request.ExpectedRowVersion,
+            Meta(),
+            cancellationToken));
+    }
+
+    [Authorize]
+    [HttpPost("{scheduleId:guid}/day-override/reset")]
+    public async Task<ActionResult<ScheduleDetails>> ResetDayOverride(
+        Guid scheduleId,
+        ResetDayOverrideRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!CanManage())
+        {
+            return Forbid();
+        }
+
+        return Ok(await schedules.ResetDayOverrideAsync(
+            User.GetUserId(),
+            scheduleId,
+            request.Date,
+            request.ExpectedRowVersion,
+            Meta(),
+            cancellationToken));
+    }
+
+    [Authorize]
+    [HttpPost("{scheduleId:guid}/copy-day")]
+    public async Task<ActionResult<ScheduleDetails>> CopyDay(
+        Guid scheduleId,
+        CopyDayScheduleRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!CanManage())
+        {
+            return Forbid();
+        }
+
+        return Ok(await schedules.CopyDayScheduleAsync(
+            User.GetUserId(),
+            scheduleId,
+            request.SourceDate,
+            request.TargetDates,
+            request.OverwriteExisting,
+            request.ExpectedRowVersion,
+            Meta(),
+            cancellationToken));
+    }
+
+    [Authorize]
+    [HttpGet("{scheduleId:guid}/closure-impact")]
+    public async Task<ActionResult<ClosureImpact>> ClosureImpact(
+        Guid scheduleId,
+        [FromQuery] DateOnly date,
+        CancellationToken cancellationToken)
+    {
+        if (!CanManage())
+        {
+            return Forbid();
+        }
+
+        return Ok(await schedules.PreviewClosureImpactAsync(User.GetUserId(), scheduleId, date, cancellationToken));
     }
 
     [Authorize]
     [HttpDelete("{scheduleId:guid}")]
-    public async Task<IActionResult> Delete(Guid scheduleId, CancellationToken cancellationToken)
+    public async Task<IActionResult> Delete(
+        Guid scheduleId,
+        [FromQuery] string? expectedRowVersion,
+        CancellationToken cancellationToken)
     {
         if (!CanManage())
         {
             return Forbid();
         }
 
-        await schedules.DeleteAsync(User.GetUserId(), scheduleId, cancellationToken);
+        await schedules.DeleteAsync(User.GetUserId(), scheduleId, expectedRowVersion, Meta(), cancellationToken);
         return NoContent();
     }
 
     [HasPermission(PermissionCodes.DoctorsSearch)]
     [HttpGet("{scheduleId:guid}/slots")]
-    public async Task<ActionResult<SlotAvailability>> Slots(Guid scheduleId, [FromQuery] DateOnly date, CancellationToken cancellationToken) =>
-        Ok(await schedules.GetAvailabilityAsync(scheduleId, date, cancellationToken));
+    public async Task<ActionResult<SlotAvailability>> Slots(
+        Guid scheduleId,
+        [FromQuery] DateOnly date,
+        [FromQuery] Guid? exceptAppointmentId,
+        CancellationToken cancellationToken)
+    {
+        var horizon = CanManageSlotsBeyondTwoWeeks()
+            ? AvailabilityHorizon.StaffExtended
+            : AvailabilityHorizon.PatientTwoWeeks;
+        var result = await schedules.GetAvailabilityAsync(scheduleId, date, cancellationToken, exceptAppointmentId, horizon);
+        return result.ToActionResult(this);
+    }
 
     private bool CanManage() =>
         User.Claims.Any(claim => claim.Type == "perm" && claim.Value is PermissionCodes.ScheduleManage or PermissionCodes.ProviderOnboard or PermissionCodes.ClinicManage);
+
+    private bool CanManageSlotsBeyondTwoWeeks() =>
+        User.Claims.Any(claim =>
+            claim.Type == "perm"
+            && claim.Value is PermissionCodes.ScheduleManage
+                or PermissionCodes.ClinicManage
+                or PermissionCodes.ProviderOnboard
+                or PermissionCodes.AppointmentsManageClinic
+                or PermissionCodes.AppointmentsBookWalkIn);
+
+    private RequestMetadata Meta() => new(ClientContext.IpAddress(HttpContext), ClientContext.UserAgent(HttpContext));
 
     private static IReadOnlyCollection<(DayOfWeek Day, TimeOnly StartsAt, TimeOnly EndsAt)> ParsePeriods(PeriodsRequest request) =>
         request.Periods.Select(period => (ParseDay(period.Day), ParseTime(period.StartsAt), ParseTime(period.EndsAt))).ToArray();

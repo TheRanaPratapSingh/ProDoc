@@ -4,35 +4,72 @@ obj/
 .vs/
 *.user
 *.suo
+*.userosscache
+*.sln.docstates
 TestResults/
+[Bb]uild/
+[Ll]og/
 *.DotSettings.user
+project.lock.json
+artifacts/
 
-## Secrets
+## Secrets / local overrides (never commit real credentials)
 appsettings.*.local.json
 secrets.json
+*.pfx
+*.p12
+*.p8
+*.jks
+*.mobileprovision
+*.keystore
 .env
 .env.*
 !.env.example
 apps/mobile/.env
 apps/mobile/.env.*
 !apps/mobile/.env.example
+deploy/.env
+deploy/.env.*
+!deploy/.env.example
 
-## Private uploads
+## Private uploads / runtime data
 App_Data/
+**/App_Data/
 
-## Node / Expo
+## Node / Expo / React Native
 node_modules/
 .expo/
 dist/
 web-build/
+coverage/
 npm-debug.log*
 yarn-error.log*
+yarn-debug.log*
 .metro-health-check*
+*.tsbuildinfo
+apps/mobile/.audit-export-android/
+apps/mobile/.audit-export-ios/
+apps/mobile/.audit-export-*/
+
+## Generated native folders (Expo prebuild; regenerate via EAS/prebuild)
+apps/mobile/ios/
+apps/mobile/android/
 
 ## OS
 .DS_Store
 Thumbs.db
+Desktop.ini
 
-## IDE
+## IDE / editors
 .idea/
 *.swp
+*~
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+
+## Logs / temp
+*.log
+tmp/
+temp/
+*.tmp

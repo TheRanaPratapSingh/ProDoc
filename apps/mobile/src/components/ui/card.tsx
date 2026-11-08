@@ -1,11 +1,11 @@
 import { View, type ViewProps } from 'react-native';
 
+import { cardElevation } from '@/theme/elevation';
 import { useProdocTheme } from '@/theme/prodoc-theme';
-import { radius, shadow, spacing } from '@/theme/tokens';
+import { radius, spacing } from '@/theme/tokens';
 
 export function Card({ style, elevated = false, ...props }: ViewProps & { elevated?: boolean }) {
   const theme = useProdocTheme();
-  const shadows = shadow[theme.scheme];
 
   return (
     <View
@@ -18,8 +18,8 @@ export function Card({ style, elevated = false, ...props }: ViewProps & { elevat
           borderColor: theme.colors.border,
           padding: spacing.xl,
           gap: spacing.lg,
-          boxShadow: elevated ? shadows.elevated : shadows.card,
         },
+        cardElevation(theme.scheme, elevated ? 'elevated' : 'card'),
         style,
       ]}
     />

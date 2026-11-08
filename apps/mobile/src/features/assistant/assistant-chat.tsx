@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter, type Href } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, View } from 'react-native';
+import { Pressable, View } from 'react-native';
 
 import { Screen } from '@/components/layout/auth-scaffold';
+import { FormScreenScroll } from '@/components/layout/keyboard-aware-form';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AppText } from '@/components/ui/text';
@@ -20,7 +22,7 @@ import {
   type AssistantMessage,
   type AssistantPendingAction,
 } from '@/services/api/assistant-api';
-import { useSessionStore } from '@/stores/session-store';
+import { useAccountPermissions, useSessionStore } from '@/stores/session-store';
 import { useProdocTheme } from '@/theme/prodoc-theme';
 import { radius, spacing } from '@/theme/tokens';
 import { problemMessage } from '@/utils/problem';
@@ -33,7 +35,7 @@ export function AssistantChatScreen() {
   const theme = useProdocTheme();
   const queryClient = useQueryClient();
   const language = useSessionStore((state) => state.account?.preferredLanguage ?? 'en');
-  const permissions = useSessionStore((state) => state.account?.permissions ?? []);
+  const permissions = useAccountPermissions();
   const canUse = permissions.includes('assistant.use');
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
@@ -147,8 +149,7 @@ export function AssistantChatScreen() {
     return (
       <Screen>
         <View style={{ padding: spacing.xl, gap: spacing.lg }}>
-          <Button label={copy.back} variant="secondary" onPress={() => router.back()} />
-          <AppText variant="title">{copy.assistantTitle}</AppText>
+          <ScreenHeader title={copy.assistantTitle} />
           <AppText variant="muted">{copy.assistantUnavailable}</AppText>
         </View>
       </Screen>
@@ -157,9 +158,8 @@ export function AssistantChatScreen() {
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={{ padding: spacing.xl, gap: spacing.lg }} keyboardShouldPersistTaps="handled">
-        <Button label={copy.back} variant="secondary" onPress={() => router.back()} />
-        <AppText variant="title">{copy.assistantTitle}</AppText>
+      <FormScreenScroll contentContainerStyle={{ padding: spacing.xl, gap: spacing.lg }}>
+        <ScreenHeader title={copy.assistantTitle} />
         <AppText variant="muted">{consent.data?.disclaimer ?? copy.assistantDisclaimer}</AppText>
         <Card>
           <AppText variant="label">{copy.assistantEmergency}</AppText>
@@ -266,7 +266,7 @@ export function AssistantChatScreen() {
           onPress={() => remove.mutate()}
         />
         {error ? <AppText variant="muted">{error}</AppText> : null}
-      </ScrollView>
+      </FormScreenScroll>
     </Screen>
   );
 }

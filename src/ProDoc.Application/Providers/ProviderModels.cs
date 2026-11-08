@@ -37,12 +37,33 @@ public sealed record AffiliationModel(
     Guid? BranchId,
     string? BranchName,
     string Kind,
-    bool IsPrimary);
+    bool IsPrimary,
+    string? AddressLine = null,
+    string? AddressLine2 = null,
+    string? Landmark = null,
+    string? Locality = null,
+    string? City = null,
+    string? District = null,
+    string? State = null,
+    string? PostalCode = null,
+    string? Country = null,
+    decimal? Latitude = null,
+    decimal? Longitude = null,
+    string? GooglePlaceId = null,
+    string? FormattedAddress = null,
+    string? CompactAddress = null,
+    string? MapsUrl = null,
+    string? DirectionsUrl = null,
+    bool HasPracticeLocationOverride = false,
+    bool LocationVerified = false);
 
 public sealed record DoctorProfile(
     Guid Id,
     string Reference,
     string Status,
+    string VerificationBadge,
+    int ProfileCompletionPercent,
+    Guid? PhotoDocumentId,
     bool IsPubliclyBookable,
     bool IsAcceptingPatients,
     string? FirstName,
@@ -54,7 +75,7 @@ public sealed record DoctorProfile(
     string PreferredLanguage,
     string? DisplayName,
     string? Biography,
-    int? YearsOfExperience,
+    int YearsOfExperience,
     IReadOnlyList<string> Languages,
     IReadOnlyList<string> Expertise,
     IReadOnlyList<QualificationModel> Qualifications,
@@ -71,14 +92,23 @@ public sealed record ClinicBranchModel(
     string Name,
     string AddressLine,
     string? AddressLine2,
+    string? Landmark,
+    string? Locality,
     string City,
+    string? District,
     string State,
     string PostalCode,
+    string Country,
     decimal? Latitude,
     decimal? Longitude,
+    string? GooglePlaceId,
+    string? FormattedAddress,
+    string? CompactAddress,
     string? PhoneNumber,
     bool IsPrimary,
-    bool IsActive);
+    bool IsActive,
+    bool LocationVerified,
+    DateTimeOffset? LocationUpdatedAtUtc);
 
 public sealed record ClinicProfile(
     Guid Id,
@@ -108,7 +138,11 @@ public sealed record DoctorCard(
     string DisplayName,
     int YearsOfExperience,
     string PrimarySpecialization,
-    Guid? PhotoDocumentId);
+    Guid? PhotoDocumentId,
+    string? ClinicName = null,
+    string? City = null,
+    string? Qualification = null,
+    bool IsVerified = true);
 
 public sealed record PublicDoctor(
     Guid Id,
@@ -122,7 +156,15 @@ public sealed record PublicDoctor(
     Guid? PhotoDocumentId,
     IReadOnlyList<AffiliationModel> Clinics);
 
-public sealed record ClinicCard(Guid Id, string Name, string Type, string City, Guid? LogoDocumentId);
+public sealed record ClinicCard(
+    Guid Id,
+    string Name,
+    string Type,
+    string City,
+    Guid? LogoDocumentId,
+    string? BranchName = null,
+    string? Location = null,
+    IReadOnlyList<string>? AssociatedDoctors = null);
 
 public sealed record PublicClinic(
     Guid Id,

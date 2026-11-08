@@ -99,22 +99,99 @@ public sealed class ProviderStore(ProDocDbContext db, UserManager<ApplicationUse
             join clinic in db.Clinics.AsNoTracking() on link.ClinicId equals clinic.Id
             select new { link, clinic }).ToListAsync(cancellationToken);
 
-        var branchIds = rows.Where(row => row.link.BranchId is not null).Select(row => row.link.BranchId!.Value).ToArray();
+        var branchIds = rows
+            .Select(row => row.link.BranchId)
+            .Where(id => id is not null)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToArray();
+        var primaryBranchIds = await db.ClinicBranches.AsNoTracking()
+            .Where(branch => rows.Select(row => row.clinic.Id).Contains(branch.ClinicId) && branch.IsActive && branch.IsPrimary)
+            .Select(branch => new { branch.ClinicId, branch.Id })
+            .ToListAsync(cancellationToken);
+        foreach (var primary in primaryBranchIds)
+        {
+            if (!branchIds.Contains(primary.Id))
+            {
+                branchIds = branchIds.Append(primary.Id).ToArray();
+            }
+        }
+
         var branches = await db.ClinicBranches.AsNoTracking()
             .Where(branch => branchIds.Contains(branch.Id))
             .ToDictionaryAsync(branch => branch.Id, cancellationToken);
 
         return rows
             .OrderByDescending(row => row.link.IsPrimary)
-            .Select(row => new AffiliationModel(
-                row.link.Id,
-                row.clinic.Id,
-                row.clinic.Name ?? row.clinic.Reference,
-                row.clinic.Status.ToString(),
-                row.link.BranchId,
-                row.link.BranchId is Guid branchId && branches.TryGetValue(branchId, out var branch) ? branch.Name : null,
-                row.link.Kind.ToString(),
-                row.link.IsPrimary))
+            .Select(row =>
+            {
+                ClinicBranch? branch = null;
+                if (row.link.BranchId is Guid linkedBranchId && branches.TryGetValue(linkedBranchId, out var linked))
+                {
+                    branch = linked;
+                }
+                else
+                {
+                    var primaryId = primaryBranchIds.FirstOrDefault(item => item.ClinicId == row.clinic.Id)?.Id;
+                    if (primaryId is Guid id && branches.TryGetValue(id, out var primaryBranch))
+                    {
+                        branch = primaryBranch;
+                    }
+                }
+
+                var useOverride = row.link.HasPracticeLocationOverride;
+                var addressLine = useOverride ? row.link.PracticeAddressLine : branch?.AddressLine;
+                var addressLine2 = useOverride ? row.link.PracticeAddressLine2 : branch?.AddressLine2;
+                var landmark = useOverride ? row.link.PracticeLandmark : branch?.Landmark;
+                var locality = useOverride ? row.link.PracticeLocality : branch?.Locality;
+                var city = useOverride ? row.link.PracticeCity : branch?.City;
+                var district = useOverride ? row.link.PracticeDistrict : branch?.District;
+                var state = useOverride ? row.link.PracticeState : branch?.State;
+                var postalCode = useOverride ? row.link.PracticePostalCode : branch?.PostalCode;
+                var country = useOverride ? row.link.PracticeCountry : branch?.Country;
+                var latitude = useOverride ? row.link.PracticeLatitude : branch?.Latitude;
+                var longitude = useOverride ? row.link.PracticeLongitude : branch?.Longitude;
+                var googlePlaceId = useOverride ? row.link.PracticeGooglePlaceId : branch?.GooglePlaceId;
+                var formatted = PracticeLocation.FormatFull(
+                    addressLine,
+                    addressLine2,
+                    landmark,
+                    locality,
+                    city,
+                    district,
+                    state,
+                    postalCode,
+                    country);
+                var compact = PracticeLocation.FormatCompact(locality, city, postalCode);
+
+                return new AffiliationModel(
+                    row.link.Id,
+                    row.clinic.Id,
+                    row.clinic.Name ?? row.clinic.Reference,
+                    row.clinic.Status.ToString(),
+                    row.link.BranchId ?? branch?.Id,
+                    branch?.Name,
+                    row.link.Kind.ToString(),
+                    row.link.IsPrimary,
+                    addressLine,
+                    addressLine2,
+                    landmark,
+                    locality,
+                    city,
+                    district,
+                    state,
+                    postalCode,
+                    country,
+                    latitude,
+                    longitude,
+                    googlePlaceId,
+                    string.IsNullOrWhiteSpace(formatted) ? null : formatted,
+                    string.IsNullOrWhiteSpace(compact) ? null : compact,
+                    null,
+                    null,
+                    useOverride,
+                    latitude is not null && longitude is not null);
+            })
             .ToArray();
     }
 
@@ -141,11 +218,25 @@ public sealed class ProviderStore(ProDocDbContext db, UserManager<ApplicationUse
 
         if (!string.IsNullOrWhiteSpace(query))
         {
-            var text = query.Trim();
+            var text = query.Trim().ToLower();
             doctors = doctors.Where(doctor =>
-                (doctor.DisplayName != null && doctor.DisplayName.Contains(text))
-                || (doctor.FirstName != null && doctor.FirstName.Contains(text))
-                || (doctor.LastName != null && doctor.LastName.Contains(text)));
+                (doctor.DisplayName != null && doctor.DisplayName.ToLower().Contains(text))
+                || (doctor.FirstName != null && doctor.FirstName.ToLower().Contains(text))
+                || (doctor.LastName != null && doctor.LastName.ToLower().Contains(text))
+                || (((doctor.FirstName ?? string.Empty) + " " + (doctor.LastName ?? string.Empty)).ToLower().Contains(text))
+                || doctor.Qualifications.Any(item => item.Name.ToLower().Contains(text))
+                || doctor.Specializations.Any(link =>
+                    db.Specializations.Any(item => item.Id == link.SpecializationId && item.Name.ToLower().Contains(text)))
+                || db.DoctorClinicAffiliations.Any(link =>
+                    link.DoctorId == doctor.Id
+                    && (db.Clinics.Any(clinic =>
+                            clinic.Id == link.ClinicId
+                            && clinic.Name != null
+                            && clinic.Name.ToLower().Contains(text))
+                        || db.ClinicBranches.Any(branch =>
+                            branch.ClinicId == link.ClinicId
+                            && branch.IsActive
+                            && branch.Name.ToLower().Contains(text)))));
         }
 
         return await doctors
@@ -153,8 +244,8 @@ public sealed class ProviderStore(ProDocDbContext db, UserManager<ApplicationUse
             .Take(50)
             .Select(doctor => new DoctorCard(
                 doctor.Id,
-                doctor.DisplayName ?? string.Empty,
-                doctor.YearsOfExperience ?? 0,
+                doctor.DisplayName ?? (((doctor.FirstName ?? string.Empty) + " " + (doctor.LastName ?? string.Empty)).Trim()),
+                doctor.YearsOfExperience,
                 db.Specializations
                     .Where(item => doctor.Specializations.Any(link => link.IsPrimary && link.SpecializationId == item.Id))
                     .Select(item => item.Name)
@@ -162,7 +253,26 @@ public sealed class ProviderStore(ProDocDbContext db, UserManager<ApplicationUse
                 doctor.Documents
                     .Where(document => document.IsCurrent && document.Category == DocumentCategory.ProfilePhoto)
                     .Select(document => (Guid?)document.Id)
-                    .FirstOrDefault()))
+                    .FirstOrDefault(),
+                db.DoctorClinicAffiliations
+                    .Where(link => link.DoctorId == doctor.Id)
+                    .OrderByDescending(link => link.IsPrimary)
+                    .Select(link => db.Clinics.Where(clinic => clinic.Id == link.ClinicId).Select(clinic => clinic.Name).FirstOrDefault())
+                    .FirstOrDefault(),
+                db.DoctorClinicAffiliations
+                    .Where(link => link.DoctorId == doctor.Id)
+                    .OrderByDescending(link => link.IsPrimary)
+                    .Select(link => db.ClinicBranches
+                        .Where(branch => branch.ClinicId == link.ClinicId && branch.IsActive)
+                        .OrderByDescending(branch => branch.IsPrimary)
+                        .Select(branch => branch.City)
+                        .FirstOrDefault())
+                    .FirstOrDefault(),
+                doctor.Qualifications
+                    .OrderBy(item => item.Name)
+                    .Select(item => item.Name)
+                    .FirstOrDefault(),
+                true))
             .ToListAsync(cancellationToken);
     }
 
@@ -187,7 +297,7 @@ public sealed class ProviderStore(ProDocDbContext db, UserManager<ApplicationUse
             doctor.Id,
             doctor.DisplayName ?? $"{doctor.FirstName} {doctor.LastName}".Trim(),
             doctor.Biography,
-            doctor.YearsOfExperience ?? 0,
+            doctor.YearsOfExperience,
             primary is not null && specializations.TryGetValue(primary.SpecializationId, out var primaryName) ? primaryName.Name : string.Empty,
             names,
             doctor.Qualifications.Select(item => item.Name).Order(StringComparer.Ordinal).ToArray(),
@@ -201,10 +311,15 @@ public sealed class ProviderStore(ProDocDbContext db, UserManager<ApplicationUse
         var clinics = ListedClinics(today);
         if (!string.IsNullOrWhiteSpace(query))
         {
-            var text = query.Trim();
+            var text = query.Trim().ToLower();
             clinics = clinics.Where(clinic =>
-                (clinic.Name != null && clinic.Name.Contains(text))
-                || clinic.Branches.Any(branch => branch.IsActive && branch.City.Contains(text)));
+                (clinic.Name != null && clinic.Name.ToLower().Contains(text))
+                || clinic.Branches.Any(branch =>
+                    branch.IsActive
+                    && (branch.Name.ToLower().Contains(text)
+                        || branch.City.ToLower().Contains(text)
+                        || branch.AddressLine.ToLower().Contains(text)
+                        || branch.PostalCode.ToLower().Contains(text))));
         }
 
         var rows = await clinics
@@ -215,15 +330,65 @@ public sealed class ProviderStore(ProDocDbContext db, UserManager<ApplicationUse
                 clinic.Id,
                 clinic.Name,
                 clinic.Type,
-                City = clinic.Branches.Where(branch => branch.IsActive && branch.IsPrimary).Select(branch => branch.City).FirstOrDefault(),
+                BranchName = clinic.Branches
+                    .Where(branch => branch.IsActive)
+                    .OrderByDescending(branch => branch.IsPrimary)
+                    .Select(branch => branch.Name)
+                    .FirstOrDefault(),
+                City = clinic.Branches
+                    .Where(branch => branch.IsActive)
+                    .OrderByDescending(branch => branch.IsPrimary)
+                    .Select(branch => branch.City)
+                    .FirstOrDefault(),
+                AddressLine = clinic.Branches
+                    .Where(branch => branch.IsActive)
+                    .OrderByDescending(branch => branch.IsPrimary)
+                    .Select(branch => branch.AddressLine)
+                    .FirstOrDefault(),
                 LogoId = clinic.Documents
                     .Where(document => document.IsCurrent && document.Category == DocumentCategory.ClinicLogo)
                     .Select(document => (Guid?)document.Id)
                     .FirstOrDefault()
             })
             .ToListAsync(cancellationToken);
+
+        var clinicIds = rows.Select(row => row.Id).ToArray();
+        var associated = clinicIds.Length == 0
+            ? []
+            : await (
+                from link in db.DoctorClinicAffiliations.AsNoTracking()
+                where clinicIds.Contains(link.ClinicId)
+                join doctor in BookableDoctors(today) on link.DoctorId equals doctor.Id
+                select new
+                {
+                    link.ClinicId,
+                    Name = doctor.DisplayName
+                        ?? (((doctor.FirstName ?? string.Empty) + " " + (doctor.LastName ?? string.Empty)).Trim())
+                }).ToListAsync(cancellationToken);
+
         return rows
-            .Select(row => new ClinicCard(row.Id, row.Name ?? string.Empty, row.Type?.ToString() ?? string.Empty, row.City ?? string.Empty, row.LogoId))
+            .Select(row =>
+            {
+                var doctors = associated
+                    .Where(item => item.ClinicId == row.Id && !string.IsNullOrWhiteSpace(item.Name))
+                    .Select(item => item.Name)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .Take(5)
+                    .ToArray();
+                var location = string.Join(
+                    ", ",
+                    new[] { row.AddressLine, row.City }.Where(part => !string.IsNullOrWhiteSpace(part)));
+                return new ClinicCard(
+                    row.Id,
+                    row.Name ?? string.Empty,
+                    row.Type?.ToString() ?? string.Empty,
+                    row.City ?? string.Empty,
+                    row.LogoId,
+                    row.BranchName,
+                    string.IsNullOrWhiteSpace(location) ? row.City : location,
+                    doctors);
+            })
             .ToArray();
     }
 
@@ -377,7 +542,23 @@ public sealed class ProviderStore(ProDocDbContext db, UserManager<ApplicationUse
             doctor.Status == VerificationStatus.Approved
             && doctor.IsAcceptingPatients
             && doctor.Registrations.Any(registration =>
-                registration.IsCurrent && (registration.ExpiresOn == null || registration.ExpiresOn >= today)));
+                registration.IsCurrent && (registration.ExpiresOn == null || registration.ExpiresOn >= today))
+            && !db.Patients.Any(patient => patient.UserId == doctor.UserId && patient.DeletionRequestedAtUtc != null)
+            && !db.Users.Any(user =>
+                user.Id == doctor.UserId
+                && (user.SuspendedAtUtc != null || user.PermanentlyDeletedAtUtc != null))
+            && db.ConsultationSchedules.Any(schedule =>
+                schedule.DoctorId == doctor.Id
+                && schedule.IsPublished
+                && db.Clinics.Any(clinic =>
+                    clinic.Id == schedule.ClinicId
+                    && clinic.Status == VerificationStatus.Approved)
+                && db.ClinicBranches.Any(branch =>
+                    branch.Id == schedule.BranchId
+                    && branch.IsActive)
+                && db.DoctorClinicAffiliations.Any(link =>
+                    link.DoctorId == doctor.Id
+                    && link.ClinicId == schedule.ClinicId)));
 
     private IQueryable<Clinic> ListedClinics(DateOnly today) =>
         db.Clinics.AsNoTracking().Where(clinic =>

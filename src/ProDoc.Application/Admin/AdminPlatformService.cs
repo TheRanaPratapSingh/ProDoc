@@ -1,5 +1,7 @@
 using System.Text;
+using Microsoft.Extensions.Options;
 using ProDoc.Application.Abstractions;
+using ProDoc.Application.Auth;
 using ProDoc.Application.Providers;
 using ProDoc.Application.Support;
 using ProDoc.Domain.Admin;
@@ -9,8 +11,15 @@ using ProDoc.Domain.Identity;
 
 namespace ProDoc.Application.Admin;
 
-public sealed class AdminPlatformService(IAdminStore store, SupportService support, IClock clock)
+public sealed class AdminPlatformService(
+    IAdminStore store,
+    IAuthStore auth,
+    SupportService support,
+    IClock clock,
+    IOptions<SessionOptions> sessionOptions)
 {
+    private readonly SessionOptions _session = sessionOptions.Value;
+
     public Task<AdminDashboardMetrics> DashboardAsync(
         DateOnly? from,
         DateOnly? to,
@@ -21,25 +30,55 @@ public sealed class AdminPlatformService(IAdminStore store, SupportService suppo
         CancellationToken cancellationToken) =>
         store.GetDashboardAsync(from, to, state, city, clinicId, appointmentStatus, cancellationToken);
 
-    public Task<IReadOnlyList<AdminUserSummary>> SearchUsersAsync(string? query, string? role, bool? suspended, CancellationToken cancellationToken) =>
-        store.SearchUsersAsync(query, role, suspended, 100, cancellationToken);
+    public Task<IReadOnlyList<AdminUserSummary>> SearchUsersAsync(
+        string? query,
+        string? role,
+        bool? suspended,
+        CancellationToken cancellationToken,
+        Guid? clinicId = null) =>
+        store.SearchUsersAsync(query, role, suspended, clinicId, 100, cancellationToken);
+
+    public async Task<AdminUserDetails> GetUserAsync(Guid userId, CancellationToken cancellationToken) =>
+        await store.GetUserDetailsAsync(userId, cancellationToken)
+        ?? throw DomainException.NotFound("account_not_found", "That account was not found.");
+
+    public async Task DeleteUserAsync(Guid actorUserId, Guid userId, RequestMetadata metadata, CancellationToken cancellationToken)
+    {
+        if (actorUserId == userId)
+        {
+            throw DomainException.Validation("cannot_delete_self", "You cannot delete your own account.");
+        }
+
+        var now = clock.UtcNow;
+        await store.PermanentDeleteUserAsync(userId, now, cancellationToken);
+        await store.RevokeRefreshTokensAsync(userId, now, cancellationToken);
+        await store.AddAuditAsync(Audit(actorUserId, AuditActions.AdminUserDeleted, metadata), cancellationToken);
+        await store.SaveChangesAsync(cancellationToken);
+    }
 
     public async Task SuspendUserAsync(Guid actorUserId, Guid userId, string? reason, RequestMetadata metadata, CancellationToken cancellationToken)
     {
         if (actorUserId == userId)
         {
-            throw DomainException.Validation("cannot_suspend_self", "You cannot suspend your own account.");
+            throw DomainException.Validation("cannot_suspend_self", "You cannot deactivate your own account.");
         }
 
-        await store.SuspendUserAsync(userId, reason, clock.UtcNow, cancellationToken);
-        await store.RevokeRefreshTokensAsync(userId, clock.UtcNow, cancellationToken);
+        var now = clock.UtcNow;
+        await store.SuspendUserAsync(userId, reason, now, cancellationToken);
+        await store.RevokeRefreshTokensAsync(userId, now, cancellationToken);
         await store.AddAuditAsync(Audit(actorUserId, AuditActions.AccountSuspended, metadata), cancellationToken);
         await store.SaveChangesAsync(cancellationToken);
     }
 
     public async Task ReactivateUserAsync(Guid actorUserId, Guid userId, RequestMetadata metadata, CancellationToken cancellationToken)
     {
-        await store.ReactivateUserAsync(userId, cancellationToken);
+        if (actorUserId == userId)
+        {
+            throw DomainException.Validation("cannot_reactivate_self", "You cannot activate your own account from this screen.");
+        }
+
+        var now = clock.UtcNow;
+        await store.ReactivateUserAsync(userId, now, cancellationToken);
         await store.AddAuditAsync(Audit(actorUserId, AuditActions.AccountReactivated, metadata), cancellationToken);
         await store.SaveChangesAsync(cancellationToken);
     }
@@ -47,6 +86,11 @@ public sealed class AdminPlatformService(IAdminStore store, SupportService suppo
     public async Task GrantRoleAsync(Guid actorUserId, Guid userId, string roleName, RequestMetadata metadata, CancellationToken cancellationToken)
     {
         EnsureAssignableRole(roleName);
+        if (roleName == RoleNames.PlatformAdmin)
+        {
+            await EnsureTargetIsAuthorizedSuperAdminAsync(userId, cancellationToken);
+        }
+
         await store.GrantRoleAsync(userId, roleName, cancellationToken);
         await store.AddAuditAsync(Audit(actorUserId, AuditActions.RoleGranted, metadata), cancellationToken);
         await store.SaveChangesAsync(cancellationToken);
@@ -81,8 +125,22 @@ public sealed class AdminPlatformService(IAdminStore store, SupportService suppo
         Guid? paymentId,
         Guid? clinicId,
         RequestMetadata metadata,
-        CancellationToken cancellationToken) =>
-        support.CreateTicketAsync(userId, category, priority, subject, description, appointmentId, paymentId, clinicId, metadata, cancellationToken);
+        CancellationToken cancellationToken,
+        string? issueType = null,
+        string? createdByRole = null) =>
+        support.CreateTicketAsync(
+            userId,
+            category,
+            priority,
+            subject,
+            description,
+            appointmentId,
+            paymentId,
+            clinicId,
+            metadata,
+            cancellationToken,
+            issueType,
+            createdByRole);
 
     public Task<IReadOnlyList<SupportTicketSummary>> ListMyTicketsAsync(Guid userId, CancellationToken cancellationToken) =>
         support.ListMyTicketsAsync(userId, cancellationToken);
@@ -222,6 +280,11 @@ public sealed class AdminPlatformService(IAdminStore store, SupportService suppo
             store.AddSetting(PlatformSetting.Create("growth.loyalty_points_per_visit", "20", "Loyalty points for a paid completed visit", null, clock.UtcNow));
             store.AddSetting(PlatformSetting.Create("growth.max_referral_rewards_per_day", "20", "Max referral rewards a user can earn per day", null, clock.UtcNow));
             store.AddSetting(PlatformSetting.Create("growth.campaign_cooldown_days", "7", "Days before the same campaign may message a user again", null, clock.UtcNow));
+            store.AddSetting(PlatformSetting.Create("growth.points_per_inr", "10", "Reward points required to redeem ₹1 ProDoc booking credit", null, clock.UtcNow));
+        }
+        else if (settings.All(item => item.Key != "growth.points_per_inr"))
+        {
+            store.AddSetting(PlatformSetting.Create("growth.points_per_inr", "10", "Reward points required to redeem ₹1 ProDoc booking credit", null, clock.UtcNow));
         }
 
         var flags = await store.ListFlagsAsync(cancellationToken);
@@ -259,6 +322,35 @@ public sealed class AdminPlatformService(IAdminStore store, SupportService suppo
         if (roleName is not (RoleNames.PlatformAdmin or RoleNames.ClinicAdmin or RoleNames.OrganizationAdmin or RoleNames.Receptionist or RoleNames.ClinicStaff or RoleNames.Doctor or RoleNames.Patient))
         {
             throw DomainException.Validation("role_invalid", "Choose a known platform role.");
+        }
+    }
+
+    private async Task EnsureTargetIsAuthorizedSuperAdminAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        var account = await auth.FindAccountByUserIdAsync(userId, cancellationToken)
+            ?? throw DomainException.NotFound("account_not_found", "That account was not found.");
+
+        var authorized = _session.SuperAdminPhones
+            .Concat(_session.DevelopmentAdminPhones)
+            .Where(phone => !string.IsNullOrWhiteSpace(phone))
+            .Any(configured =>
+            {
+                try
+                {
+                    return PhoneNumber.ParseIndianMobile(configured).E164
+                           == PhoneNumber.ParseIndianMobile(account.PhoneNumber).E164;
+                }
+                catch (DomainException)
+                {
+                    return false;
+                }
+            });
+
+        if (!authorized)
+        {
+            throw DomainException.Validation(
+                "super_admin_not_allowlisted",
+                "PlatformAdmin can only be granted to Super Admin allowlisted mobile numbers.");
         }
     }
 

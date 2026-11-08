@@ -15,7 +15,7 @@ public sealed class GrowthFlowTests(ProDocApiFactory factory)
     {
         var doctor = await SignInAsync("9000000111");
         var referrer = await SignInAsync("9000000112");
-        var admin = await SignInAsync("9000000001");
+        var admin = await SignInAsync("9000000001", purpose: "admin");
         await SendAsync(HttpMethod.Put, "/api/v1/account/profile", referrer.AccessToken, JsonContent.Create(new
         {
             fullName = "Referrer Patel",
@@ -149,6 +149,8 @@ public sealed class GrowthFlowTests(ProDocApiFactory factory)
 
     private async Task<(Guid ScheduleId, Guid ClinicId, Guid BranchId, Guid DoctorId)> PublishAsync(SessionBody doctor, SessionBody admin, Guid specializationId)
     {
+        await ProviderSeed.EnsureDoctorRoleAsync(_client, doctor.AccessToken, admin.AccessToken);
+        doctor = await SignInAsync("9000000111");
         await SendAsync(HttpMethod.Put, "/api/v1/doctors/me/basics", doctor.AccessToken, JsonContent.Create(new
         {
             firstName = "Gita",
@@ -190,10 +192,10 @@ public sealed class GrowthFlowTests(ProDocApiFactory factory)
         await UploadAsync(doctor.AccessToken, "/api/v1/doctors/me/documents", "registration.pdf", "application/pdf", "%PDF-1.4\n"u8.ToArray(), "RegistrationCertificate");
         var submitted = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/doctors/me/submit", doctor.AccessToken));
         var doctorId = submitted.GetProperty("id").GetGuid();
-        await SendAsync(HttpMethod.Post, $"/api/v1/admin/verifications/doctors/{doctorId}", admin.AccessToken, JsonContent.Create(new { decision = "Approve" }));
+        await ReadAsync(await SendAsync(HttpMethod.Post, $"/api/v1/admin/verifications/doctors/{doctorId}", admin.AccessToken, JsonContent.Create(new { decision = "Approve" })));
 
-        var clinic = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/clinics", doctor.AccessToken));
-        var clinicId = clinic.GetProperty("id").GetGuid();
+        var ownerUserId = await ProviderSeed.GetUserIdAsync(_client, doctor.AccessToken);
+        var clinicId = await ProviderSeed.CreateClinicOwnedByAsync(_client, admin.AccessToken, ownerUserId);
         await SendAsync(HttpMethod.Put, $"/api/v1/clinics/{clinicId}", doctor.AccessToken, JsonContent.Create(new
         {
             name = "Growth Care",
@@ -214,7 +216,7 @@ public sealed class GrowthFlowTests(ProDocApiFactory factory)
         var branchId = branched.GetProperty("branches").EnumerateArray().Single().GetProperty("id").GetGuid();
         await UploadAsync(doctor.AccessToken, $"/api/v1/clinics/{clinicId}/documents", "clinic.pdf", "application/pdf", "%PDF-1.4\n"u8.ToArray(), "ClinicRegistration");
         await SendAsync(HttpMethod.Post, $"/api/v1/clinics/{clinicId}/submit", doctor.AccessToken);
-        await SendAsync(HttpMethod.Post, $"/api/v1/admin/verifications/clinics/{clinicId}", admin.AccessToken, JsonContent.Create(new { decision = "Approve" }));
+        await ReadAsync(await SendAsync(HttpMethod.Post, $"/api/v1/admin/verifications/clinics/{clinicId}", admin.AccessToken, JsonContent.Create(new { decision = "Approve" })));
         await SendAsync(HttpMethod.Post, "/api/v1/doctors/me/affiliations", doctor.AccessToken, JsonContent.Create(new { clinicId, branchId, kind = "Independent" }));
         var created = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/schedules", doctor.AccessToken, JsonContent.Create(new
         {
@@ -224,12 +226,18 @@ public sealed class GrowthFlowTests(ProDocApiFactory factory)
             slotDurationMinutes = 20
         })));
         var scheduleId = created.GetProperty("id").GetGuid();
+        var rowVersion = created.GetProperty("rowVersion").GetString();
         var days = Enum.GetNames<DayOfWeek>();
-        await SendAsync(HttpMethod.Put, $"/api/v1/schedules/{scheduleId}/hours", doctor.AccessToken, JsonContent.Create(new
+        var withHours = await ReadAsync(await SendAsync(HttpMethod.Put, $"/api/v1/schedules/{scheduleId}/hours", doctor.AccessToken, JsonContent.Create(new
         {
+            expectedRowVersion = rowVersion,
             periods = days.Select(day => new { day, startsAt = "09:00", endsAt = "12:00" })
-        }));
-        await SendAsync(HttpMethod.Post, $"/api/v1/schedules/{scheduleId}/publication", doctor.AccessToken, JsonContent.Create(new { isPublished = true }));
+        })));
+        await ReadAsync(await SendAsync(HttpMethod.Post, $"/api/v1/schedules/{scheduleId}/publication", doctor.AccessToken, JsonContent.Create(new
+        {
+            isPublished = true,
+            expectedRowVersion = withHours.GetProperty("rowVersion").GetString()
+        })));
         return (scheduleId, clinicId, branchId, doctorId);
     }
 
@@ -247,9 +255,9 @@ public sealed class GrowthFlowTests(ProDocApiFactory factory)
         return body.GetProperty("slots").EnumerateArray().Select(slot => slot.GetProperty("start").GetString()!).ToArray();
     }
 
-    private async Task<SessionBody> SignInAsync(string phone, string? referralCode = null)
+    private async Task<SessionBody> SignInAsync(string phone, string? referralCode = null, string? purpose = null)
     {
-        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone });
+        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone, purpose });
         var otpBody = await otpResponse.Content.ReadAsStringAsync();
         Assert.True(otpResponse.IsSuccessStatusCode, otpBody);
         var otp = JsonSerializer.Deserialize<OtpBody>(otpBody, new JsonSerializerOptions(JsonSerializerDefaults.Web));
@@ -258,7 +266,8 @@ public sealed class GrowthFlowTests(ProDocApiFactory factory)
             phoneNumber = phone,
             code = otp!.DevelopmentCode,
             deviceName = "integration-test",
-            referralCode
+            referralCode,
+            purpose
         });
         var verifyBody = await verifyResponse.Content.ReadAsStringAsync();
         Assert.True(verifyResponse.IsSuccessStatusCode, verifyBody);

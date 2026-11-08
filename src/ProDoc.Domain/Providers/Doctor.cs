@@ -37,7 +37,7 @@ public sealed class Doctor
 
     public string? Biography { get; private set; }
 
-    public int? YearsOfExperience { get; private set; }
+    public int YearsOfExperience { get; private set; }
 
     public VerificationStatus Status { get; private set; }
 
@@ -112,7 +112,7 @@ public sealed class Doctor
     public void UpdateProfessional(
         string? displayName,
         string? biography,
-        int? yearsOfExperience,
+        int yearsOfExperience,
         IEnumerable<string>? spokenLanguages,
         IEnumerable<string>? expertise,
         DateTimeOffset now)
@@ -120,7 +120,7 @@ public sealed class Doctor
         EnsureEditable();
         DisplayName = ProviderText.Optional(displayName, 120, "display_name_invalid", "Enter a display name of 120 characters or fewer.");
         Biography = ProviderText.Multiline(biography, 2000, "biography_invalid", "Enter a biography of 2000 characters or fewer.");
-        YearsOfExperience = yearsOfExperience is null ? null : ProviderText.ExperienceYears(yearsOfExperience.Value);
+        YearsOfExperience = ProviderText.ExperienceYears(yearsOfExperience);
         ReplaceLanguages(spokenLanguages is null ? [] : ProviderText.SpokenLanguages(spokenLanguages));
         ReplaceExpertise(ProviderText.Expertise(expertise));
         Touch(now);
@@ -274,6 +274,71 @@ public sealed class Doctor
         Touch(now);
     }
 
+    /// <summary>
+    /// Suspends an approved doctor when the linked account is deactivated by Super Admin.
+    /// </summary>
+    public void SuspendForAccountDeactivation(string reason, DateTimeOffset now)
+    {
+        if (Status != VerificationStatus.Approved)
+        {
+            IsAcceptingPatients = false;
+            Touch(now);
+            return;
+        }
+
+        RejectionReason = RequiredReason(reason);
+        Status = VerificationStatus.Suspended;
+        ReviewedAtUtc = now;
+        IsAcceptingPatients = false;
+        Touch(now);
+    }
+
+    /// <summary>
+    /// Restores a doctor who was suspended solely because the account was deactivated.
+    /// </summary>
+    public void ReinstateFromAccountDeactivation(string expectedReason, DateTimeOffset now)
+    {
+        if (Status != VerificationStatus.Suspended)
+        {
+            return;
+        }
+
+        if (!string.Equals(RejectionReason, expectedReason, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        Status = VerificationStatus.Approved;
+        RejectionReason = null;
+        ReviewedAtUtc = now;
+        IsAcceptingPatients = true;
+        Touch(now);
+    }
+
+    /// <summary>
+    /// Scrubs provider PII and removes public discovery while keeping the doctor row for clinical history.
+    /// </summary>
+    public void AnonymizeForPermanentDeletion(DateTimeOffset now)
+    {
+        FirstName = "Deleted";
+        LastName = "Doctor";
+        DisplayName = "Deleted Doctor";
+        Email = null;
+        Biography = null;
+        DateOfBirth = null;
+        Gender = null;
+        IsAcceptingPatients = false;
+        if (Status is VerificationStatus.Approved or VerificationStatus.Submitted or VerificationStatus.UnderReview
+            or VerificationStatus.AdditionalInformationRequired)
+        {
+            Status = VerificationStatus.Suspended;
+            RejectionReason = "Account permanently deleted";
+            ReviewedAtUtc = now;
+        }
+
+        Touch(now);
+    }
+
     public void Submit(DateTimeOffset now)
     {
         if (Status is VerificationStatus.Submitted or VerificationStatus.UnderReview or VerificationStatus.Approved or VerificationStatus.Suspended)
@@ -288,6 +353,55 @@ public sealed class Doctor
         SubmittedAtUtc = now;
         ReviewedAtUtc = null;
         RejectionReason = null;
+        Touch(now);
+    }
+
+    /// <summary>
+    /// Platform-admin provisioned doctors skip the verification queue when invite essentials are complete.
+    /// Does not require documents (those remain for self-serve onboarding).
+    /// </summary>
+    public void ProvisionApproved(DateTimeOffset now)
+    {
+        if (Status is VerificationStatus.Suspended or VerificationStatus.Rejected)
+        {
+            throw DomainException.Validation(
+                "doctor_not_provisionable",
+                "Suspended or rejected doctor profiles cannot be activated from an invitation.");
+        }
+
+        if (string.IsNullOrWhiteSpace(DisplayName)
+            && string.IsNullOrWhiteSpace(FirstName)
+            && string.IsNullOrWhiteSpace(LastName))
+        {
+            throw DomainException.Validation(
+                "application_incomplete",
+                "Add the doctor's name before activating the profile.");
+        }
+
+        if (!_specializations.Any(link => link.IsPrimary))
+        {
+            throw DomainException.Validation(
+                "application_incomplete",
+                "Assign a primary specialization before activating the doctor.");
+        }
+
+        if (!HasValidRegistration(DateOnly.FromDateTime(now.UtcDateTime)))
+        {
+            throw DomainException.Validation(
+                "application_incomplete",
+                "Add a current medical registration before activating the doctor.");
+        }
+
+        if (string.IsNullOrWhiteSpace(DisplayName))
+        {
+            DisplayName = $"{FirstName} {LastName}".Trim();
+        }
+
+        Status = VerificationStatus.Approved;
+        SubmittedAtUtc ??= now;
+        ReviewedAtUtc = now;
+        RejectionReason = null;
+        IsAcceptingPatients = true;
         Touch(now);
     }
 
@@ -358,9 +472,9 @@ public sealed class Doctor
             throw DomainException.Validation("application_incomplete", "Add your name, date of birth, and gender before submitting.");
         }
 
-        if (string.IsNullOrWhiteSpace(DisplayName) || YearsOfExperience is null || _languages.Count == 0)
+        if (string.IsNullOrWhiteSpace(DisplayName) || _languages.Count == 0)
         {
-            throw DomainException.Validation("application_incomplete", "Add your display name, experience, and spoken languages before submitting.");
+            throw DomainException.Validation("application_incomplete", "Add your display name and spoken languages before submitting.");
         }
 
         if (_qualifications.Count == 0 || !_specializations.Any(link => link.IsPrimary))

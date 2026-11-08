@@ -18,11 +18,13 @@ public sealed record ScheduleDetails(
     int SlotDurationMinutes,
     int BufferMinutes,
     int? MaxPatients,
+    string BookingMode,
     DateOnly? EffectiveFrom,
     DateOnly? EffectiveTo,
     string TimeZoneId,
     bool IsPublished,
     bool RequiresApproval,
+    string RowVersion,
     IReadOnlyList<HoursModel> Hours,
     IReadOnlyList<BreakModel> Breaks,
     IReadOnlyList<ClosureModel> Closures,
@@ -40,15 +42,29 @@ public sealed record DiscoveryPlace(
     Guid? BranchId,
     string? BranchName,
     string? AddressLine,
+    string? AddressLine2,
+    string? Landmark,
+    string? Locality,
     string? City,
+    string? District,
+    string? State,
+    string? PostalCode,
+    string? Country,
     decimal? Latitude,
     decimal? Longitude,
+    string? GooglePlaceId,
+    string? FormattedAddress,
+    string? CompactAddress,
     decimal ConsultationFee,
     int SlotDurationMinutes,
     double? DistanceKm,
-    string? PostalCode,
     string? PhoneNumber,
-    string? DirectionsUrl);
+    string? Qualification,
+    string? RegistrationNumber,
+    string? RegistrationCouncil,
+    string? MapsUrl,
+    string? DirectionsUrl,
+    bool LocationVerified);
 
 public sealed record DiscoveredDoctor(
     Guid Id,
@@ -70,16 +86,25 @@ public sealed record DiscoveredBranch(
     Guid Id,
     string Name,
     string AddressLine,
+    string? AddressLine2,
+    string? Landmark,
     string? Locality,
     string City,
+    string? District,
     string State,
     string PostalCode,
+    string Country,
     string? PhoneNumber,
     decimal? Latitude,
     decimal? Longitude,
+    string? GooglePlaceId,
+    string? FormattedAddress,
+    string? CompactAddress,
     double? DistanceKm,
     int DoctorCount,
+    string? MapsUrl,
     string? DirectionsUrl,
+    bool LocationVerified,
     bool OpenToday);
 
 public sealed record DiscoveredClinic(
@@ -94,11 +119,34 @@ public sealed record DiscoveredClinic(
 
 public sealed record SearchSuggestion(string Kind, string Label, Guid? Id);
 
-public sealed record AvailableSlot(TimeOnly Start, TimeOnly End);
+public sealed record AvailableSlot(
+    TimeOnly Start,
+    TimeOnly End,
+    bool Available = true,
+    int? BookedCount = null,
+    int? Capacity = null,
+    int? Remaining = null,
+    string? TokenPrefix = null);
 
-public sealed record SlotAvailability(Guid ScheduleId, DateOnly Date, IReadOnlyList<AvailableSlot> Slots);
+public sealed record SlotAvailability(
+    Guid ScheduleId,
+    DateOnly Date,
+    string BookingMode,
+    IReadOnlyList<AvailableSlot> Slots);
 
 public sealed record DayAvailability(DateOnly Date, string Status, int SlotCount, TimeOnly? FirstSlot, Guid? ScheduleId);
+
+public sealed record ClosureImpact(int ConfirmedAppointments);
+
+/// <summary>
+/// Patient booking sees only the clinic week containing today plus the next week (14 days, Mon–Sun).
+/// Staff / doctor management may look further ahead.
+/// </summary>
+public enum AvailabilityHorizon
+{
+    PatientTwoWeeks = 0,
+    StaffExtended = 1,
+}
 
 public sealed record DiscoveryQuery(
     string? Text,

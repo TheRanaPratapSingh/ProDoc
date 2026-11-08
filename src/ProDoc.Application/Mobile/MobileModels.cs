@@ -10,6 +10,7 @@ public static class NotificationDeepLinks
         kind switch
         {
             var value when value.StartsWith("appointment", StringComparison.OrdinalIgnoreCase) => "/visits",
+            var value when value.StartsWith("follow_up", StringComparison.OrdinalIgnoreCase) => "/visits",
             var value when value.StartsWith("queue", StringComparison.OrdinalIgnoreCase) => "/queue",
             var value when value.Equals("check_in", StringComparison.OrdinalIgnoreCase) => "/queue",
             var value when value.StartsWith("prescription", StringComparison.OrdinalIgnoreCase) =>
@@ -28,6 +29,7 @@ public static class NotificationDeepLinks
         var body = kind.ToLowerInvariant() switch
         {
             var value when value.Contains("appointment") => "Your visit was updated. Open ProDoc for details.",
+            var value when value.Contains("follow_up") => "You have a follow-up update. Open ProDoc for details.",
             var value when value.Contains("queue") => "Your queue status changed. Open ProDoc for details.",
             var value when value.Contains("prescription") => "A prescription is available in ProDoc.",
             var value when value.Contains("payment") => "A payment update is available in ProDoc.",

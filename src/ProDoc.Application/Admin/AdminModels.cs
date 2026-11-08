@@ -88,7 +88,9 @@ public sealed record SupportTicketDetails(
     DateTimeOffset? DueAtUtc = null,
     string? ResolutionDetails = null,
     IReadOnlyList<ProDoc.Application.Support.SupportAttachmentDetails>? Attachments = null,
-    IReadOnlyList<ProDoc.Application.Support.TicketStatusHistoryDetails>? StatusHistory = null);
+    IReadOnlyList<ProDoc.Application.Support.TicketStatusHistoryDetails>? StatusHistory = null,
+    string? IssueType = null,
+    string? CreatedByRole = null);
 
 public sealed record PlatformSettingDetails(Guid Id, string Key, string Value, string? Description, DateTimeOffset UpdatedAtUtc);
 

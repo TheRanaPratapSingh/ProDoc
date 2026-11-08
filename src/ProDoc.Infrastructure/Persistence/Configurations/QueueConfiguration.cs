@@ -52,8 +52,11 @@ public sealed class QueueTokenCounterConfiguration : IEntityTypeConfiguration<Qu
     {
         builder.ToTable("QueueTokenCounters");
         builder.Property(item => item.Id).ValueGeneratedNever();
+        builder.Property(item => item.RangeStartMinutes).HasDefaultValue(QueueTokenCounter.DayWideRangeMinutes);
         builder.Property(item => item.RowVersion).IsRowVersion();
-        builder.HasIndex(item => new { item.ClinicId, item.BranchId, item.DoctorId, item.OperatingDate }).IsUnique();
+        builder.HasIndex(item => new { item.ClinicId, item.BranchId, item.DoctorId, item.OperatingDate, item.RangeStartMinutes })
+            .IsUnique()
+            .HasDatabaseName("IX_QueueTokenCounters_Clinic_Branch_Doctor_Date_Range");
     }
 }
 
@@ -129,7 +132,7 @@ public sealed class UserNotificationConfiguration : IEntityTypeConfiguration<Use
         builder.Property(item => item.Id).ValueGeneratedNever();
         builder.Property(item => item.Kind).HasMaxLength(64);
         builder.Property(item => item.Title).HasMaxLength(120);
-        builder.Property(item => item.Body).HasMaxLength(280);
+        builder.Property(item => item.Body).HasMaxLength(500);
         builder.HasIndex(item => new { item.UserId, item.CreatedAtUtc });
         builder.HasIndex(item => new { item.UserId, item.Kind, item.SubjectId, item.CreatedAtUtc });
     }

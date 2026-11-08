@@ -15,7 +15,9 @@ public interface IQueueStore
 
     Task<Clinic?> FindClinicAsync(Guid clinicId, CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<(Guid DoctorId, string DisplayName)>> ListClinicDoctorsAsync(Guid clinicId, Guid branchId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<(Guid DoctorId, string DisplayName, int YearsOfExperience)>> ListClinicDoctorsAsync(Guid clinicId, Guid branchId, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<Guid>> ListReceptionistAssignedDoctorIdsAsync(Guid receptionistUserId, Guid clinicId, CancellationToken cancellationToken);
 
     void AddStaff(ClinicStaffMember member);
 
@@ -31,7 +33,13 @@ public interface IQueueStore
 
     void AddSession(ClinicQueueSession session);
 
-    Task<QueueTokenCounter?> FindCounterAsync(Guid clinicId, Guid branchId, Guid doctorId, DateOnly date, CancellationToken cancellationToken);
+    Task<QueueTokenCounter?> FindCounterAsync(
+        Guid clinicId,
+        Guid branchId,
+        Guid doctorId,
+        DateOnly date,
+        CancellationToken cancellationToken,
+        int rangeStartMinutes = QueueTokenCounter.DayWideRangeMinutes);
 
     void AddCounter(QueueTokenCounter counter);
 
@@ -97,6 +105,23 @@ public interface IClinicAccess
     Task EnsureQueueAccessAsync(Guid userId, Guid clinicId, Guid branchId, CancellationToken cancellationToken);
 
     Task EnsureDoctorQueueAsync(Guid userId, Guid doctorId, Guid clinicId, Guid branchId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Ensures the user may act for the doctor at the clinic branch (owner, affiliated doctor, or staff with coverage).
+    /// </summary>
+    Task EnsureDoctorCoverageAsync(Guid userId, Guid clinicId, Guid branchId, Guid doctorId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// True when the user is active clinic staff (any branch) for the clinic.
+    /// </summary>
+    Task<bool> HasClinicStaffAccessAsync(Guid userId, Guid clinicId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Empty list = all affiliated doctors (legacy). Non-empty = only those doctor IDs.
+    /// </summary>
+    Task<IReadOnlyList<Guid>> ListAssignedDoctorIdsAsync(Guid userId, Guid clinicId, CancellationToken cancellationToken);
+
+    Task EnsureClinicStaffAccessAsync(Guid userId, Guid clinicId, CancellationToken cancellationToken);
 
     Task<bool> IsClinicOwnerAsync(Guid userId, Guid clinicId, CancellationToken cancellationToken);
 

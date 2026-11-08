@@ -2,6 +2,26 @@ namespace ProDoc.Application.Support;
 
 public sealed record HelpCategoryDetails(Guid Id, string Code, string NameEn, string NameHi, int SortOrder, bool IsActive);
 
+public sealed record SupportIssueTypeDetails(string Code, string LabelEn, string LabelHi, string TicketCategory, string DefaultPriority);
+
+public sealed record SupportTopicDetails(
+    string Code,
+    string TitleEn,
+    string TitleHi,
+    string BodyEn,
+    string BodyHi,
+    string HelpCategoryCode,
+    IReadOnlyList<SupportIssueTypeDetails> IssueTypes,
+    IReadOnlyList<string> Roles);
+
+public sealed record SupportCatalogDetails(
+    IReadOnlyList<SupportTopicDetails> Topics,
+    string SupportEmail,
+    string SupportPhone,
+    bool LiveAgentsAvailable);
+
+public sealed record HelpArticleFeedbackResult(Guid ArticleId, bool WasHelpful, int HelpfulCount, int NotHelpfulCount);
+
 public sealed record HelpArticleSummary(
     Guid Id,
     Guid CategoryId,

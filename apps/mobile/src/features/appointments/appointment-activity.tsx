@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
 
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AppText } from '@/components/ui/text';
@@ -19,7 +19,6 @@ function localDate(offset = 0) {
 
 export function AppointmentActivity() {
   const copy = useCopy();
-  const router = useRouter();
   const from = localDate(0);
   const to = localDate(7);
   const activity = useQuery({
@@ -29,8 +28,7 @@ export function AppointmentActivity() {
 
   return (
     <AuthScaffold>
-      <Button label={copy.back} variant="secondary" onPress={() => router.back()} />
-      <AppText variant="title">{copy.appointmentActivity}</AppText>
+      <ScreenHeader title={copy.appointmentActivity} />
       {(activity.data ?? []).map((visit) => (
         <Card key={visit.id}>
           <AppText>{visit.reference ?? visit.id}</AppText>

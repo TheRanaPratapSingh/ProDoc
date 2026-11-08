@@ -36,7 +36,9 @@ public sealed record QueueEntryDetails(
     int? PatientsAhead,
     int? EstimatedWaitMinutes,
     string? StatusMessage,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    string? PaymentStatus = null,
+    string? PaymentMethod = null);
 
 public sealed record QueueSummary(
     int TotalToday,
@@ -46,7 +48,10 @@ public sealed record QueueSummary(
     int Completed,
     int WalkIns,
     QueueEntryDetails? Current,
-    QueueEntryDetails? Next);
+    QueueEntryDetails? Next,
+    int Skipped = 0,
+    int Paid = 0,
+    int Unpaid = 0);
 
 public sealed record QueueDisplayBoard(
     string ClinicName,
@@ -79,7 +84,8 @@ public sealed record AppointmentSearchItem(
     Guid DoctorId,
     string DoctorName,
     DateTimeOffset StartsAtUtc,
-    bool IsWalkIn);
+    bool IsWalkIn,
+    string? TokenLabel);
 
 public sealed record AdminQueueSnapshot(
     Guid ClinicId,
@@ -115,4 +121,4 @@ public sealed record DeskClinic(
 
 public sealed record DeskBranch(Guid Id, string Name, bool IsActive);
 
-public sealed record DeskDoctor(Guid Id, string DisplayName);
+public sealed record DeskDoctor(Guid Id, string DisplayName, int YearsOfExperience = 0);

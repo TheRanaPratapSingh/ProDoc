@@ -13,13 +13,14 @@ public sealed class PreviewCouponRequestValidator : AbstractValidator<PreviewCou
     }
 }
 
-public sealed record RedeemPointsRequest(int Points);
+public sealed record RedeemPointsRequest(int Points, string? IdempotencyKey = null);
 
 public sealed class RedeemPointsRequestValidator : AbstractValidator<RedeemPointsRequest>
 {
     public RedeemPointsRequestValidator()
     {
         RuleFor(request => request.Points).GreaterThan(0);
+        RuleFor(request => request.IdempotencyKey).MaximumLength(120).When(request => request.IdempotencyKey is not null);
     }
 }
 

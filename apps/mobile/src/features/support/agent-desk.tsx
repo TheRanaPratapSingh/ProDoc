@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, View } from 'react-native';
 
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { AppText } from '@/components/ui/text';
@@ -18,15 +18,14 @@ import {
   manageSupportTicket,
   openDispute,
 } from '@/services/api/support-api';
-import { useSessionStore } from '@/stores/session-store';
+import { useAccountPermissions } from '@/stores/session-store';
 import { spacing } from '@/theme/tokens';
 import { problemMessage } from '@/utils/problem';
 
 export function AgentDesk() {
   const copy = useCopy();
-  const router = useRouter();
   const queryClient = useQueryClient();
-  const permissions = useSessionStore((state) => state.account?.permissions ?? []);
+  const permissions = useAccountPermissions();
   const canSupport = permissions.includes('admin.support');
   const [filter, setFilter] = useState('open');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -98,8 +97,7 @@ export function AgentDesk() {
 
   return (
     <AuthScaffold>
-      <Button label={copy.back} variant="secondary" onPress={() => router.back()} />
-      <AppText variant="title">{copy.agentDeskTitle}</AppText>
+      <ScreenHeader title={copy.agentDeskTitle} />
       <Card>
         <AppText variant="label">{copy.supportAnalytics}</AppText>
         <AppText variant="muted">

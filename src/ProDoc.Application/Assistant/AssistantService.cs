@@ -165,10 +165,15 @@ public sealed class AssistantService(
             {
                 var top = recommendations[0];
                 var date = await NextOpenDateAsync(top.ScheduleId, cancellationToken);
-                var slots = date is null
-                    ? null
-                    : await schedules.GetAvailabilityAsync(top.ScheduleId, date.Value, cancellationToken);
-                var first = slots?.Slots.FirstOrDefault();
+                AvailableSlot? first = null;
+                if (date is not null)
+                {
+                    var slots = await schedules.GetAvailabilityAsync(top.ScheduleId, date.Value, cancellationToken);
+                    if (slots.IsSuccess)
+                    {
+                        first = slots.Value!.Slots.FirstOrDefault(slot => slot.Available);
+                    }
+                }
                 if (date is not null && first is not null)
                 {
                     var actionId = Guid.NewGuid();
@@ -216,7 +221,13 @@ public sealed class AssistantService(
                     grounded.AppendLine("Authorized medical record facts for this patient only:");
                     foreach (var record in records.Take(3))
                     {
-                        var details = await medical.GetRecordAsync(userId, record.Id, metadata, cancellationToken);
+                        var detailsResult = await medical.GetRecordAsync(userId, record.Id, metadata, cancellationToken);
+                        if (detailsResult.IsFailure || detailsResult.Value is null)
+                        {
+                            continue;
+                        }
+
+                        var details = detailsResult.Value;
                         grounded.AppendLine($"Record {details.Id} subject={details.SubjectName}");
                         sources.Add(new AssistantSourceRef("medical_record", details.SubjectName, details.Id.ToString()));
                         foreach (var allergy in details.Allergies.Where(item => item.IsActive).Take(5))
@@ -336,8 +347,31 @@ public sealed class AssistantService(
             throw DomainException.Validation("assistant_action_invalid", "The proposed booking details are incomplete.");
         }
 
-        var held = await booking.HoldAsync(userId, pending.ScheduleId.Value, date, start, metadata, cancellationToken);
-        var confirmed = await booking.ConfirmAsync(userId, held.Id, null, "Booked with ProDoc Assistant", null, metadata, cancellationToken);
+        var heldResult = await booking.HoldAsync(userId, pending.ScheduleId.Value, date, start, metadata, cancellationToken);
+        if (heldResult.IsFailure || heldResult.Value is null)
+        {
+            throw DomainException.Validation(
+                heldResult.Error?.Code ?? "assistant_booking_failed",
+                heldResult.Error?.Message ?? "Unable to hold that appointment slot.");
+        }
+
+        var held = heldResult.Value;
+        var confirmedResult = await booking.ConfirmAsync(
+            userId,
+            held.Id,
+            null,
+            "Booked with ProDoc Assistant",
+            null,
+            metadata,
+            cancellationToken);
+        if (confirmedResult.IsFailure || confirmedResult.Value is null)
+        {
+            throw DomainException.Validation(
+                confirmedResult.Error?.Code ?? "assistant_booking_failed",
+                confirmedResult.Error?.Message ?? "Unable to confirm that appointment.");
+        }
+
+        var confirmed = confirmedResult.Value;
         conversation.SetPendingAction(null, clock.UtcNow);
         var note = conversation.Language == "hi"
             ? $"अपॉइंटमेंट पुष्टि हो गई: {confirmed.Reference}."
@@ -456,7 +490,7 @@ public sealed class AssistantService(
         {
             var date = today.AddDays(offset);
             var availability = await schedules.GetAvailabilityAsync(scheduleId, date, cancellationToken);
-            if (availability.Slots.Count > 0)
+            if (availability.IsSuccess && availability.Value!.Slots.Count > 0)
             {
                 return date;
             }

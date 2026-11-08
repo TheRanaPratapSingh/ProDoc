@@ -29,6 +29,7 @@ public sealed class ReviewsController(ReviewService reviews) : ControllerBase
             request.CleanlinessRating,
             request.StaffBehaviourRating,
             request.WaitingTimeRating,
+            request.ConsultationRating,
             request.Body,
             Meta(),
             cancellationToken);
@@ -44,9 +45,18 @@ public sealed class ReviewsController(ReviewService reviews) : ControllerBase
             request.CleanlinessRating,
             request.StaffBehaviourRating,
             request.WaitingTimeRating,
+            request.ConsultationRating,
             request.Body,
             Meta(),
             cancellationToken);
+
+    [HasPermission(PermissionCodes.ReviewCreate)]
+    [HttpDelete("reviews/{reviewId:guid}")]
+    public async Task<IActionResult> Delete(Guid reviewId, CancellationToken cancellationToken)
+    {
+        await reviews.DeleteAsync(User.GetUserId(), reviewId, Meta(), cancellationToken);
+        return NoContent();
+    }
 
     [HttpGet("reviews/{reviewId:guid}")]
     public Task<ReviewDetails> Get(Guid reviewId, CancellationToken cancellationToken) =>
@@ -71,6 +81,11 @@ public sealed class ReviewsController(ReviewService reviews) : ControllerBase
     [HttpGet("clinics/{clinicId:guid}/rating-summary")]
     public Task<RatingSummary> ClinicSummary(Guid clinicId, CancellationToken cancellationToken) =>
         reviews.ClinicRatingSummaryAsync(clinicId, cancellationToken);
+
+    [HasPermission(PermissionCodes.ReviewCreate)]
+    [HttpGet("reviews/mine")]
+    public Task<IReadOnlyList<ReviewDetails>> MyReviews(CancellationToken cancellationToken) =>
+        reviews.ListMineForPatientAsync(User.GetUserId(), cancellationToken);
 
     [HasPermission(PermissionCodes.ReviewRespond)]
     [HttpGet("reviews/inbox")]
@@ -126,20 +141,22 @@ public sealed class ReviewsController(ReviewService reviews) : ControllerBase
 public sealed record CreateReviewRequest(
     Guid AppointmentId,
     string TargetKind,
-    int OverallRating,
+    int? OverallRating,
     int? CommunicationRating,
     int? CleanlinessRating,
     int? StaffBehaviourRating,
     int? WaitingTimeRating,
-    string? Body);
+    string? Body,
+    int? ConsultationRating = null);
 
 public sealed record UpdateReviewRequest(
-    int OverallRating,
+    int? OverallRating,
     int? CommunicationRating,
     int? CleanlinessRating,
     int? StaffBehaviourRating,
     int? WaitingTimeRating,
-    string? Body);
+    string? Body,
+    int? ConsultationRating = null);
 
 public sealed record ReviewResponseRequest(string Body);
 

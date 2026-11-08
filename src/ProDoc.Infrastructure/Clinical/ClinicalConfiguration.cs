@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using ProDoc.Domain.Appointments;
 using ProDoc.Domain.Clinical;
+using ProDoc.Domain.Providers;
 
 namespace ProDoc.Infrastructure.Clinical;
 
@@ -197,5 +199,49 @@ public sealed class PrescriptionItemConfiguration : IEntityTypeConfiguration<Pre
         builder.Property(x => x.Route).HasMaxLength(80).IsRequired();
         builder.Property(x => x.Instructions).HasMaxLength(500);
         builder.HasIndex(x => x.PrescriptionVersionId);
+    }
+}
+
+public sealed class PatientFollowUpConfiguration : IEntityTypeConfiguration<PatientFollowUp>
+{
+    public void Configure(EntityTypeBuilder<PatientFollowUp> builder)
+    {
+        builder.ToTable("PatientFollowUps");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.Id).ValueGeneratedNever();
+        builder.Property(x => x.PatientName).HasMaxLength(120).IsRequired();
+        builder.Property(x => x.FollowUpNote).HasMaxLength(500);
+        builder.Property(x => x.TimeZoneId).HasMaxLength(64).IsRequired();
+        builder.Property(x => x.Status).HasConversion<int>();
+        builder.HasIndex(x => new { x.DoctorId, x.RecommendedDate });
+        builder.HasIndex(x => new { x.PatientUserId, x.RecommendedDate });
+        builder.HasIndex(x => new { x.ClinicId, x.RecommendedDate });
+        builder.HasIndex(x => x.SourceConsultationId);
+        builder.HasIndex(x => x.SourceAppointmentId);
+        builder.HasIndex(x => x.LinkedAppointmentId);
+        builder.HasOne<Doctor>().WithMany().HasForeignKey(x => x.DoctorId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<Clinic>().WithMany().HasForeignKey(x => x.ClinicId).OnDelete(DeleteBehavior.Restrict);
+        // SQL Server rejects multiple cascade/SetNull paths from Appointments → PatientFollowUps.
+        builder.HasOne<Appointment>().WithMany().HasForeignKey(x => x.SourceAppointmentId).OnDelete(DeleteBehavior.NoAction);
+        builder.HasOne<Appointment>().WithMany().HasForeignKey(x => x.LinkedAppointmentId).OnDelete(DeleteBehavior.NoAction);
+        builder.HasOne<ConsultationRecord>().WithMany().HasForeignKey(x => x.SourceConsultationId).OnDelete(DeleteBehavior.NoAction);
+    }
+}
+
+public sealed class FollowUpReminderConfiguration : IEntityTypeConfiguration<FollowUpReminder>
+{
+    public void Configure(EntityTypeBuilder<FollowUpReminder> builder)
+    {
+        builder.ToTable("FollowUpReminders");
+        builder.HasKey(x => x.Id);
+        builder.Property(x => x.Id).ValueGeneratedNever();
+        builder.Property(x => x.IdempotencyKey).HasMaxLength(160).IsRequired();
+        builder.Property(x => x.SkipReason).HasMaxLength(240);
+        builder.Property(x => x.ReminderType).HasConversion<int>();
+        builder.Property(x => x.DeliveryStatus).HasConversion<int>();
+        builder.HasIndex(x => x.IdempotencyKey).IsUnique();
+        builder.HasIndex(x => new { x.FollowUpId, x.ScheduledAtUtc });
+        builder.HasIndex(x => new { x.DeliveryStatus, x.ScheduledAtUtc });
+        builder.HasOne<PatientFollowUp>().WithMany().HasForeignKey(x => x.FollowUpId).OnDelete(DeleteBehavior.Cascade);
     }
 }

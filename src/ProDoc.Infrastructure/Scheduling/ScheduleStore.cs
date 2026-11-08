@@ -2,6 +2,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using ProDoc.Application.Scheduling;
 using ProDoc.Domain.Common;
+using ProDoc.Domain.Governance;
 using ProDoc.Domain.Providers;
 using ProDoc.Domain.Scheduling;
 using ProDoc.Infrastructure.Persistence;
@@ -36,6 +37,16 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
         await Schedules(tracking: false).Where(schedule => schedule.DoctorId == doctorId && schedule.IsPublished).ToListAsync(cancellationToken);
 
     public void Remove(ConsultationSchedule schedule) => db.ConsultationSchedules.Remove(schedule);
+
+    public void ApplyExpectedRowVersion(ConsultationSchedule schedule, byte[] expectedRowVersion)
+    {
+        if (expectedRowVersion is not { Length: > 0 })
+        {
+            throw DomainException.Validation("row_version_invalid", "Reload the schedule and try again.");
+        }
+
+        db.Entry(schedule).Property(item => item.RowVersion).OriginalValue = expectedRowVersion;
+    }
 
     public async Task<IReadOnlyList<DiscoveryPlace>> SearchAsync(
         DiscoveryQuery query,
@@ -82,7 +93,7 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
             doctor.Id,
             doctor.DisplayName ?? $"{doctor.FirstName} {doctor.LastName}".Trim(),
             doctor.Biography,
-            doctor.YearsOfExperience ?? 0,
+            doctor.YearsOfExperience,
             doctor.Gender,
             primary is not null && names.TryGetValue(primary.SpecializationId, out var primaryName) ? primaryName.Name : string.Empty,
             doctor.Specializations
@@ -100,8 +111,13 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
             ownPlaces.Select(row => row.ToPlace(null, null)).ToArray());
     }
 
-    public async Task SaveChangesAsync(CancellationToken cancellationToken)
+    public async Task SaveChangesAsync(AuditLog? audit, CancellationToken cancellationToken)
     {
+        if (audit is not null)
+        {
+            db.Set<AuditLog>().Add(audit);
+        }
+
         try
         {
             await db.SaveChangesAsync(cancellationToken);
@@ -136,21 +152,25 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
 
     public async Task<IReadOnlyList<SearchSuggestion>> SuggestAsync(string text, CancellationToken cancellationToken)
     {
+        var needle = text.Trim().ToLower();
         var specializations = await db.Specializations.AsNoTracking()
-            .Where(item => item.IsActive && item.Name.Contains(text))
+            .Where(item => item.IsActive && item.Name.ToLower().Contains(needle))
             .OrderBy(item => item.Name)
             .Take(4)
             .Select(item => new SearchSuggestion("specialization", item.Name, item.Id))
             .ToListAsync(cancellationToken);
         var cities = await db.ClinicBranches.AsNoTracking()
-            .Where(item => item.IsActive && item.City.Contains(text))
+            .Where(item => item.IsActive && item.City.ToLower().Contains(needle))
             .Select(item => item.City)
             .Distinct()
             .OrderBy(item => item)
             .Take(4)
             .ToListAsync(cancellationToken);
         var clinics = await db.Clinics.AsNoTracking()
-            .Where(item => item.Status == VerificationStatus.Approved && item.Name != null && item.Name.Contains(text))
+            .Where(item =>
+                item.Status == VerificationStatus.Approved
+                && ((item.Name != null && item.Name.ToLower().Contains(needle))
+                    || item.Branches.Any(branch => branch.IsActive && branch.Name.ToLower().Contains(needle))))
             .OrderBy(item => item.Name)
             .Take(4)
             .Select(item => new SearchSuggestion("clinic", item.Name!, item.Id))
@@ -269,10 +289,29 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
         var rows = ListedClinics(today);
         if (!string.IsNullOrWhiteSpace(query.Text))
         {
-            var text = query.Text.Trim();
+            var text = query.Text.Trim().ToLower();
             rows = rows.Where(clinic =>
-                (clinic.Name != null && clinic.Name.Contains(text))
-                || clinic.Branches.Any(branch => branch.IsActive && (branch.City.Contains(text) || branch.PostalCode.Contains(text) || branch.AddressLine.Contains(text))));
+                (clinic.Name != null && clinic.Name.ToLower().Contains(text))
+                || clinic.Branches.Any(branch =>
+                    branch.IsActive
+                    && (branch.Name.ToLower().Contains(text)
+                        || branch.City.ToLower().Contains(text)
+                        || branch.PostalCode.ToLower().Contains(text)
+                        || branch.AddressLine.ToLower().Contains(text)))
+                || db.ConsultationSchedules.Any(schedule =>
+                    schedule.IsPublished
+                    && schedule.ClinicId == clinic.Id
+                    && db.Doctors.Any(doctor =>
+                        doctor.Id == schedule.DoctorId
+                        && doctor.Status == VerificationStatus.Approved
+                        && (
+                            (doctor.DisplayName != null && doctor.DisplayName.ToLower().Contains(text))
+                            || (doctor.FirstName != null && doctor.FirstName.ToLower().Contains(text))
+                            || (doctor.LastName != null && doctor.LastName.ToLower().Contains(text))
+                            || doctor.Qualifications.Any(item => item.Name.ToLower().Contains(text))
+                            || doctor.Specializations.Any(link =>
+                                db.Specializations.Any(item =>
+                                    item.Id == link.SpecializationId && item.Name.ToLower().Contains(text)))))));
         }
 
         if (!string.IsNullOrWhiteSpace(query.City))
@@ -290,7 +329,12 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
         if (!string.IsNullOrWhiteSpace(query.Locality))
         {
             var locality = query.Locality.Trim();
-            rows = rows.Where(clinic => clinic.Branches.Any(branch => branch.IsActive && branch.AddressLine.Contains(locality)));
+            rows = rows.Where(clinic => clinic.Branches.Any(branch =>
+                branch.IsActive
+                && ((branch.Locality != null && branch.Locality.Contains(locality))
+                    || branch.AddressLine.Contains(locality)
+                    || (branch.AddressLine2 != null && branch.AddressLine2.Contains(locality))
+                    || (branch.Landmark != null && branch.Landmark.Contains(locality)))));
         }
 
         if (!string.IsNullOrWhiteSpace(query.ClinicType) && Enum.TryParse<ClinicType>(query.ClinicType, true, out var clinicType))
@@ -356,15 +400,24 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
                     branch.Name,
                     branch.AddressLine,
                     branch.AddressLine2,
+                    branch.Landmark,
+                    branch.Locality,
                     branch.City,
+                    branch.District,
                     branch.State,
                     branch.PostalCode,
+                    branch.Country,
                     branch.PhoneNumber,
                     branch.Latitude,
                     branch.Longitude,
+                    branch.GooglePlaceId,
+                    branch.FormattedAddress,
+                    branch.CompactAddress,
                     distance,
                     schedules.Count(item => item.BranchId == branch.Id),
                     null,
+                    null,
+                    branch.Latitude is not null && branch.Longitude is not null,
                     open);
             }).Where(branch => query.RadiusKm is not double radius || branch.DistanceKm is null || branch.DistanceKm <= radius)
                 .OrderBy(branch => branch.DistanceKm ?? double.MaxValue)
@@ -416,15 +469,22 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
             from clinic in clinics.DefaultIfEmpty()
             join branch in db.ClinicBranches.AsNoTracking() on schedule.BranchId equals branch.Id into branches
             from branch in branches.DefaultIfEmpty()
+            join affiliation in db.DoctorClinicAffiliations.AsNoTracking()
+                on new { DoctorId = doctor.Id, ClinicId = clinic.Id } equals new { affiliation.DoctorId, affiliation.ClinicId }
+                into affiliations
+            from affiliation in affiliations.DefaultIfEmpty()
             where schedule.ClinicId != null
                 && clinic != null
                 && branch != null
+                && affiliation != null
                 && clinic.Status == VerificationStatus.Approved
                 && branch.IsActive
                 && (clinic.RegistrationExpiresOn == null || clinic.RegistrationExpiresOn >= today)
-                && db.DoctorClinicAffiliations.Any(link => link.DoctorId == doctor.Id && link.ClinicId == clinic.Id)
                 && !db.Patients.Any(patient => patient.UserId == doctor.UserId && patient.DeletionRequestedAtUtc != null)
-            select new { schedule, doctor, clinic, branch };
+                && !db.Users.Any(user =>
+                    user.Id == doctor.UserId
+                    && (user.SuspendedAtUtc != null || user.PermanentlyDeletedAtUtc != null))
+            select new { schedule, doctor, clinic, branch, affiliation };
 
         if (doctorId is Guid selectedDoctor)
         {
@@ -453,7 +513,7 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
 
         if (query.MinExperience is int experience)
         {
-            rows = rows.Where(row => (row.doctor.YearsOfExperience ?? 0) >= experience);
+            rows = rows.Where(row => row.doctor.YearsOfExperience >= experience);
         }
 
         if (!string.IsNullOrWhiteSpace(query.Gender))
@@ -483,7 +543,12 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
         if (!string.IsNullOrWhiteSpace(query.Locality))
         {
             var locality = query.Locality.Trim();
-            rows = rows.Where(row => row.branch != null && (row.branch.AddressLine.Contains(locality) || (row.branch.AddressLine2 != null && row.branch.AddressLine2.Contains(locality))));
+            rows = rows.Where(row =>
+                row.branch != null
+                && ((row.branch.Locality != null && row.branch.Locality.Contains(locality))
+                    || row.branch.AddressLine.Contains(locality)
+                    || (row.branch.AddressLine2 != null && row.branch.AddressLine2.Contains(locality))
+                    || (row.branch.Landmark != null && row.branch.Landmark.Contains(locality))));
         }
 
         if (query.Availability is "today" or "tomorrow")
@@ -513,18 +578,21 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
 
         if (!string.IsNullOrWhiteSpace(query.Text))
         {
-            var text = query.Text.Trim();
+            var text = query.Text.Trim().ToLower();
             rows = rows.Where(row =>
-                (row.doctor.DisplayName != null && row.doctor.DisplayName.Contains(text))
-                || (row.doctor.FirstName != null && row.doctor.FirstName.Contains(text))
-                || (row.doctor.LastName != null && row.doctor.LastName.Contains(text))
-                || (row.clinic != null && row.clinic.Name != null && row.clinic.Name.Contains(text))
-                || (row.branch != null && row.branch.City.Contains(text))
-                || (row.branch != null && row.branch.AddressLine.Contains(text))
-                || (row.branch != null && row.branch.PostalCode.Contains(text))
-                || row.doctor.Qualifications.Any(item => item.Name.Contains(text))
+                (row.doctor.DisplayName != null && row.doctor.DisplayName.ToLower().Contains(text))
+                || (row.doctor.FirstName != null && row.doctor.FirstName.ToLower().Contains(text))
+                || (row.doctor.LastName != null && row.doctor.LastName.ToLower().Contains(text))
+                || (((row.doctor.FirstName ?? string.Empty) + " " + (row.doctor.LastName ?? string.Empty)).ToLower().Contains(text))
+                || (row.clinic != null && row.clinic.Name != null && row.clinic.Name.ToLower().Contains(text))
+                || (row.branch != null && row.branch.Name.ToLower().Contains(text))
+                || (row.branch != null && row.branch.City.ToLower().Contains(text))
+                || (row.branch != null && row.branch.AddressLine.ToLower().Contains(text))
+                || (row.branch != null && row.branch.PostalCode.ToLower().Contains(text))
+                || row.doctor.Qualifications.Any(item => item.Name.ToLower().Contains(text))
                 || db.Specializations.Any(item =>
-                    row.doctor.Specializations.Any(link => link.SpecializationId == item.Id) && item.Name.Contains(text)));
+                    row.doctor.Specializations.Any(link => link.SpecializationId == item.Id)
+                    && item.Name.ToLower().Contains(text)));
         }
 
         if (query.Latitude is double latitude && query.Longitude is double longitude && query.RadiusKm is double radius)
@@ -554,7 +622,7 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
                 .Where(item => row.doctor.Specializations.Any(link => link.IsPrimary && link.SpecializationId == item.Id))
                 .Select(item => item.Name)
                 .FirstOrDefault() ?? string.Empty,
-            row.doctor.YearsOfExperience ?? 0,
+            row.doctor.YearsOfExperience,
             row.doctor.Documents
                 .Where(document => document.IsCurrent && document.Category == DocumentCategory.ProfilePhoto)
                 .Select(document => (Guid?)document.Id)
@@ -564,13 +632,41 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
             row.branch == null ? null : row.branch.Id,
             row.branch == null ? null : row.branch.Name,
             row.branch == null ? null : row.branch.AddressLine,
+            row.branch == null ? null : row.branch.AddressLine2,
+            row.branch == null ? null : row.branch.Landmark,
+            row.branch == null ? null : row.branch.Locality,
             row.branch == null ? null : row.branch.City,
+            row.branch == null ? null : row.branch.District,
+            row.branch == null ? null : row.branch.State,
+            row.branch == null ? null : row.branch.PostalCode,
+            row.branch == null ? null : row.branch.Country,
             row.branch == null ? null : row.branch.Latitude,
             row.branch == null ? null : row.branch.Longitude,
+            row.branch == null ? null : row.branch.GooglePlaceId,
+            row.branch == null ? null : row.branch.PhoneNumber,
+            row.affiliation == null ? null : row.affiliation.PracticeAddressLine,
+            row.affiliation == null ? null : row.affiliation.PracticeAddressLine2,
+            row.affiliation == null ? null : row.affiliation.PracticeLandmark,
+            row.affiliation == null ? null : row.affiliation.PracticeLocality,
+            row.affiliation == null ? null : row.affiliation.PracticeCity,
+            row.affiliation == null ? null : row.affiliation.PracticeDistrict,
+            row.affiliation == null ? null : row.affiliation.PracticeState,
+            row.affiliation == null ? null : row.affiliation.PracticePostalCode,
+            row.affiliation == null ? null : row.affiliation.PracticeCountry,
+            row.affiliation == null ? null : row.affiliation.PracticeLatitude,
+            row.affiliation == null ? null : row.affiliation.PracticeLongitude,
+            row.affiliation == null ? null : row.affiliation.PracticeGooglePlaceId,
             row.schedule.ConsultationFee,
             row.schedule.SlotDurationMinutes,
-            row.branch == null ? null : row.branch.PostalCode,
-            row.branch == null ? null : row.branch.PhoneNumber));
+            row.doctor.Qualifications.Select(item => item.Name).OrderBy(item => item).FirstOrDefault(),
+            row.doctor.Registrations
+                .Where(registration => registration.IsCurrent)
+                .Select(registration => registration.Number)
+                .FirstOrDefault(),
+            row.doctor.Registrations
+                .Where(registration => registration.IsCurrent)
+                .Select(registration => registration.Council)
+                .FirstOrDefault()));
     }
 
     private IQueryable<ConsultationSchedule> Schedules(bool tracking)
@@ -594,19 +690,66 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
         string? ClinicName,
         Guid? BranchId,
         string? BranchName,
-        string? AddressLine,
-        string? City,
-        decimal? Latitude,
-        decimal? Longitude,
+        string? BranchAddressLine,
+        string? BranchAddressLine2,
+        string? BranchLandmark,
+        string? BranchLocality,
+        string? BranchCity,
+        string? BranchDistrict,
+        string? BranchState,
+        string? BranchPostalCode,
+        string? BranchCountry,
+        decimal? BranchLatitude,
+        decimal? BranchLongitude,
+        string? BranchGooglePlaceId,
+        string? PhoneNumber,
+        string? PracticeAddressLine,
+        string? PracticeAddressLine2,
+        string? PracticeLandmark,
+        string? PracticeLocality,
+        string? PracticeCity,
+        string? PracticeDistrict,
+        string? PracticeState,
+        string? PracticePostalCode,
+        string? PracticeCountry,
+        decimal? PracticeLatitude,
+        decimal? PracticeLongitude,
+        string? PracticeGooglePlaceId,
         decimal ConsultationFee,
         int SlotDurationMinutes,
-        string? PostalCode,
-        string? PhoneNumber)
+        string? Qualification,
+        string? RegistrationNumber,
+        string? RegistrationCouncil)
     {
         public DiscoveryPlace ToPlace(double? originLatitude, double? originLongitude)
         {
+            var useOverride = !string.IsNullOrWhiteSpace(PracticeAddressLine);
+            var addressLine = useOverride ? PracticeAddressLine : BranchAddressLine;
+            var addressLine2 = useOverride ? PracticeAddressLine2 : BranchAddressLine2;
+            var landmark = useOverride ? PracticeLandmark : BranchLandmark;
+            var locality = useOverride ? PracticeLocality : BranchLocality;
+            var city = useOverride ? PracticeCity : BranchCity;
+            var district = useOverride ? PracticeDistrict : BranchDistrict;
+            var state = useOverride ? PracticeState : BranchState;
+            var postalCode = useOverride ? PracticePostalCode : BranchPostalCode;
+            var country = useOverride ? PracticeCountry : BranchCountry;
+            var latitude = useOverride ? PracticeLatitude : BranchLatitude;
+            var longitude = useOverride ? PracticeLongitude : BranchLongitude;
+            var googlePlaceId = useOverride ? PracticeGooglePlaceId : BranchGooglePlaceId;
+            var formatted = PracticeLocation.FormatFull(
+                addressLine,
+                addressLine2,
+                landmark,
+                locality,
+                city,
+                district,
+                state,
+                postalCode,
+                country);
+            var compact = PracticeLocation.FormatCompact(locality, city, postalCode);
+
             double? distance = null;
-            if (originLatitude is double lat && originLongitude is double lng && Latitude is decimal placeLat && Longitude is decimal placeLng)
+            if (originLatitude is double lat && originLongitude is double lng && latitude is decimal placeLat && longitude is decimal placeLng)
             {
                 distance = DistanceKm(lat, lng, (double)placeLat, (double)placeLng);
             }
@@ -622,16 +765,30 @@ public sealed class ScheduleStore(ProDocDbContext db) : IScheduleStore
                 ClinicName,
                 BranchId,
                 BranchName,
-                AddressLine,
-                City,
-                Latitude,
-                Longitude,
+                addressLine,
+                addressLine2,
+                landmark,
+                locality,
+                city,
+                district,
+                state,
+                postalCode,
+                country,
+                latitude,
+                longitude,
+                googlePlaceId,
+                string.IsNullOrWhiteSpace(formatted) ? null : formatted,
+                string.IsNullOrWhiteSpace(compact) ? null : compact,
                 ConsultationFee,
                 SlotDurationMinutes,
                 distance,
-                PostalCode,
                 PhoneNumber,
-                null);
+                Qualification,
+                RegistrationNumber,
+                RegistrationCouncil,
+                null,
+                null,
+                latitude is not null && longitude is not null);
         }
 
         private static double DistanceKm(double lat1, double lng1, double lat2, double lng2)

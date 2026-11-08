@@ -62,4 +62,58 @@ public sealed class ScheduleTests
         schedule.SetEffectivePeriod(new DateOnly(2026, 11, 5), null, Now);
         Assert.Empty(schedule.GenerateSlots(new DateOnly(2026, 11, 4)));
     }
+
+    [Fact]
+    public void Default_weekday_hours_are_monday_to_friday_eleven_to_seventeen()
+    {
+        var schedule = ConsultationSchedule.Create(Guid.NewGuid(), null, null, 300, 10, Now);
+        schedule.ApplyDefaultWeekdayHours(Now);
+        schedule.Publish(Now);
+
+        Assert.Equal(5, schedule.Hours.Count);
+        Assert.All(schedule.Hours, hour =>
+        {
+            Assert.Equal(new TimeOnly(11, 0), hour.StartsAt);
+            Assert.Equal(new TimeOnly(17, 0), hour.EndsAt);
+            Assert.InRange(hour.Day, DayOfWeek.Monday, DayOfWeek.Friday);
+        });
+
+        Assert.NotEmpty(schedule.GenerateSlots(new DateOnly(2026, 11, 6))); // Friday
+        Assert.Empty(schedule.GenerateSlots(new DateOnly(2026, 11, 7))); // Saturday
+        Assert.Empty(schedule.GenerateSlots(new DateOnly(2026, 11, 8))); // Sunday
+        Assert.NotEmpty(schedule.GenerateSlots(new DateOnly(2026, 11, 9))); // next Monday
+        Assert.NotEmpty(schedule.GenerateSlots(new DateOnly(2026, 12, 1))); // next month Tuesday
+    }
+
+    [Fact]
+    public void Date_extras_replace_weekly_hours_for_that_day_only()
+    {
+        var schedule = ConsultationSchedule.Create(Guid.NewGuid(), null, null, 300, 30, Now);
+        schedule.ApplyDefaultWeekdayHours(Now);
+        var friday = new DateOnly(2026, 11, 6);
+        var saturday = new DateOnly(2026, 11, 7);
+
+        schedule.ReplaceExtrasForDate(friday, [(new TimeOnly(12, 0), new TimeOnly(16, 0))], Now);
+        var fridaySlots = schedule.GenerateSlots(friday);
+        Assert.Equal(new TimeOnly(12, 0), fridaySlots[0].Start);
+        Assert.DoesNotContain(fridaySlots, slot => slot.Start == new TimeOnly(11, 0));
+        Assert.Equal(new TimeOnly(11, 0), schedule.GenerateSlots(new DateOnly(2026, 11, 5))[0].Start);
+
+        schedule.ReplaceExtrasForDate(saturday, [(new TimeOnly(10, 0), new TimeOnly(12, 0))], Now);
+        Assert.NotEmpty(schedule.GenerateSlots(saturday));
+
+        schedule.ReplaceExtrasForDate(friday, [], Now);
+        Assert.Equal(new TimeOnly(11, 0), schedule.GenerateSlots(friday)[0].Start);
+    }
+
+    [Fact]
+    public void Closure_blocks_slots_without_changing_weekly_template()
+    {
+        var schedule = ConsultationSchedule.Create(Guid.NewGuid(), null, null, 300, 10, Now);
+        schedule.ApplyDefaultWeekdayHours(Now);
+        var leaveDate = new DateOnly(2026, 11, 10);
+        schedule.AddClosure(leaveDate, "Personal Leave", Now);
+        Assert.Empty(schedule.GenerateSlots(leaveDate));
+        Assert.NotEmpty(schedule.GenerateSlots(new DateOnly(2026, 11, 11)));
+    }
 }

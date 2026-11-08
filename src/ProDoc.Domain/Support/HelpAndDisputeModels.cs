@@ -176,6 +176,33 @@ public sealed class HelpArticle
     }
 }
 
+public sealed class HelpArticleFeedback
+{
+    private HelpArticleFeedback()
+    {
+    }
+
+    public Guid Id { get; private set; }
+
+    public Guid ArticleId { get; private set; }
+
+    public Guid? UserId { get; private set; }
+
+    public bool WasHelpful { get; private set; }
+
+    public DateTimeOffset CreatedAtUtc { get; private set; }
+
+    public static HelpArticleFeedback Create(Guid articleId, Guid? userId, bool wasHelpful, DateTimeOffset now) =>
+        new()
+        {
+            Id = Guid.NewGuid(),
+            ArticleId = articleId,
+            UserId = userId,
+            WasHelpful = wasHelpful,
+            CreatedAtUtc = now
+        };
+}
+
 public sealed class SupportAttachment
 {
     private SupportAttachment()

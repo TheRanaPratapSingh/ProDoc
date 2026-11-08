@@ -1,3 +1,4 @@
+using ProDoc.Application.Providers;
 using ProDoc.Domain.Appointments;
 using ProDoc.Domain.Billing;
 using ProDoc.Domain.Governance;
@@ -70,6 +71,12 @@ public interface IFinanceStore
     Task<AdminFinanceDashboard> BuildAdminDashboardAsync(CancellationToken cancellationToken);
 
     Task<IReadOnlyList<SettlementDetails>> ListSettlementsAsync(Guid? clinicId, CancellationToken cancellationToken);
+
+    Task<DoctorEarningsDashboard> BuildDoctorEarningsAsync(
+        Guid doctorId,
+        Guid? clinicId,
+        DateOnly today,
+        CancellationToken cancellationToken);
 }
 
 public interface IInvoicePdfGenerator

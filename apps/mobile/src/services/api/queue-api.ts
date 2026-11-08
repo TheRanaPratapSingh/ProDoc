@@ -46,6 +46,8 @@ export type QueueEntry = {
   estimatedWaitMinutes: number | null;
   statusMessage: string | null;
   updatedAtUtc: string;
+  paymentStatus?: string | null;
+  paymentMethod?: string | null;
 };
 
 export type QueueSummary = {
@@ -57,6 +59,9 @@ export type QueueSummary = {
   walkIns: number;
   current: QueueEntry | null;
   next: QueueEntry | null;
+  skipped?: number;
+  paid?: number;
+  unpaid?: number;
 };
 
 export type QueueDisplay = {
@@ -81,6 +86,7 @@ export type AppointmentSearchItem = {
   doctorName: string;
   startsAtUtc: string;
   isWalkIn: boolean;
+  tokenLabel: string | null;
 };
 
 export type DeskClinic = { id: string; name: string; branches: { id: string; name: string; isActive: boolean }[] };
@@ -92,7 +98,9 @@ export async function listDeskClinics() {
 
 export async function listDeskDoctors(clinicId: string, branchId: string) {
   const response = await withAuthRetry(() =>
-    api.get<{ id: string; displayName: string }[]>(`/api/v1/clinics/${clinicId}/branches/${branchId}/doctors`),
+    api.get<{ id: string; displayName: string; yearsOfExperience: number }[]>(
+      `/api/v1/clinics/${clinicId}/branches/${branchId}/doctors`,
+    ),
   );
   return response.data;
 }
@@ -133,6 +141,15 @@ export async function registerDeskWalkIn(
       `/api/v1/clinics/${clinicId}/branches/${branchId}/walk-ins`,
       body,
     ),
+  );
+  return response.data;
+}
+
+export async function listBranchQueue(clinicId: string, branchId: string, date?: string) {
+  const response = await withAuthRetry(() =>
+    api.get<QueueEntry[]>(`/api/v1/clinics/${clinicId}/branches/${branchId}/queue`, {
+      params: date ? { date } : undefined,
+    }),
   );
   return response.data;
 }

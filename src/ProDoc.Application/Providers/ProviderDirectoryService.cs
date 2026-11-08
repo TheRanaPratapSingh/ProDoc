@@ -39,7 +39,14 @@ public sealed class ProviderDirectoryService(IProviderStore store, IClock clock)
 
     private static string? Normalize(string? query)
     {
-        var trimmed = query?.Trim();
-        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return null;
+        }
+
+        var parts = query.Split(
+            (char[])[' ', '\t', '\r', '\n'],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length == 0 ? null : string.Join(' ', parts);
     }
 }

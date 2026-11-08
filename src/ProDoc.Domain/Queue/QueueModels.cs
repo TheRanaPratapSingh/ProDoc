@@ -155,6 +155,9 @@ public sealed class ClinicQueueSession
 
 public sealed class QueueTokenCounter
 {
+    /// <summary>Sentinel for day-wide counters used by timed-slot visit tokens.</summary>
+    public const int DayWideRangeMinutes = -1;
+
     private QueueTokenCounter()
     {
     }
@@ -169,6 +172,11 @@ public sealed class QueueTokenCounter
 
     public DateOnly OperatingDate { get; private set; }
 
+    /// <summary>
+    /// Local range start in minutes from midnight for hourly queues, or <see cref="DayWideRangeMinutes"/> for timed slots.
+    /// </summary>
+    public int RangeStartMinutes { get; private set; } = DayWideRangeMinutes;
+
     public int LastIssuedNumber { get; private set; }
 
     public byte[] RowVersion { get; private set; } = null!;
@@ -177,7 +185,8 @@ public sealed class QueueTokenCounter
         Guid clinicId,
         Guid branchId,
         Guid doctorId,
-        DateOnly operatingDate) =>
+        DateOnly operatingDate,
+        int rangeStartMinutes = DayWideRangeMinutes) =>
         new()
         {
             Id = Guid.NewGuid(),
@@ -185,6 +194,7 @@ public sealed class QueueTokenCounter
             BranchId = branchId,
             DoctorId = doctorId,
             OperatingDate = operatingDate,
+            RangeStartMinutes = rangeStartMinutes,
             LastIssuedNumber = 0
         };
 
@@ -347,8 +357,37 @@ public sealed class UserNotification
             UserId = userId,
             Kind = kind.Trim(),
             SubjectId = subjectId,
-            Title = title.Trim(),
-            Body = body.Trim(),
+            Title = title.Length <= 120 ? title.Trim() : title.Trim()[..120],
+            Body = body.Length <= 500 ? body.Trim() : body.Trim()[..500],
             CreatedAtUtc = now
         };
+
+    public void MarkRead(DateTimeOffset now)
+    {
+        if (ReadAtUtc is not null)
+        {
+            return;
+        }
+
+        ReadAtUtc = now;
+    }
+}
+
+/// <summary>Stable notification kind strings used across portals and deep links.</summary>
+public static class NotificationKinds
+{
+    public const string AppointmentConfirmed = "appointment.confirmed";
+    public const string AppointmentCancelled = "appointment.cancelled";
+    public const string AppointmentRescheduled = "appointment.rescheduled";
+    public const string AppointmentReminder = "appointment.reminder";
+    public const string FollowUpRecommended = "follow_up.recommended";
+    public const string FollowUpUpdated = "follow_up.updated";
+    public const string FollowUpReminder = "follow_up.reminder";
+    public const string FollowUpCancelled = "follow_up.cancelled";
+    public const string AppointmentScheduleUpdate = "appointment.schedule_update";
+    public const string AppointmentCheckedIn = "appointment.checked_in";
+    public const string AppointmentCompleted = "appointment.completed";
+    public const string AppointmentNoShow = "appointment.no_show";
+    public const string PaymentPaid = "payment.paid";
+    public const string PaymentFailed = "payment.failed";
 }

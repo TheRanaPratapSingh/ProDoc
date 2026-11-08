@@ -32,7 +32,7 @@ public sealed class QueueStore(ProDocDbContext db, UserManager<ApplicationUser> 
     public Task<Clinic?> FindClinicAsync(Guid clinicId, CancellationToken cancellationToken) =>
         db.Clinics.AsNoTracking().Include(clinic => clinic.Branches).SingleOrDefaultAsync(clinic => clinic.Id == clinicId, cancellationToken);
 
-    public async Task<IReadOnlyList<(Guid DoctorId, string DisplayName)>> ListClinicDoctorsAsync(
+    public async Task<IReadOnlyList<(Guid DoctorId, string DisplayName, int YearsOfExperience)>> ListClinicDoctorsAsync(
         Guid clinicId,
         Guid branchId,
         CancellationToken cancellationToken)
@@ -41,9 +41,24 @@ public sealed class QueueStore(ProDocDbContext db, UserManager<ApplicationUser> 
             .Where(item => item.ClinicId == clinicId && (item.BranchId == null || item.BranchId == branchId))
             .Join(db.Doctors.AsNoTracking(), affiliation => affiliation.DoctorId, doctor => doctor.Id, (affiliation, doctor) => doctor)
             .Distinct()
-            .Select(doctor => new { doctor.Id, doctor.DisplayName })
+            .Select(doctor => new { doctor.Id, doctor.DisplayName, doctor.YearsOfExperience })
             .ToListAsync(cancellationToken);
-        return rows.Select(row => (row.Id, row.DisplayName ?? "Doctor")).ToArray();
+        return rows.Select(row => (row.Id, row.DisplayName ?? "Doctor", row.YearsOfExperience)).ToArray();
+    }
+
+    public async Task<IReadOnlyList<Guid>> ListReceptionistAssignedDoctorIdsAsync(
+        Guid receptionistUserId,
+        Guid clinicId,
+        CancellationToken cancellationToken)
+    {
+        return await db.ReceptionistDoctorAssignments.AsNoTracking()
+            .Where(item =>
+                item.ReceptionistUserId == receptionistUserId
+                && item.ClinicId == clinicId
+                && item.IsActive)
+            .Select(item => item.DoctorId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
     }
 
     public async Task<Guid?> FindUserIdByPhoneAsync(string normalizedPhone, CancellationToken cancellationToken)
@@ -83,9 +98,19 @@ public sealed class QueueStore(ProDocDbContext db, UserManager<ApplicationUser> 
 
     public void AddSession(ClinicQueueSession session) => db.ClinicQueueSessions.Add(session);
 
-    public Task<QueueTokenCounter?> FindCounterAsync(Guid clinicId, Guid branchId, Guid doctorId, DateOnly date, CancellationToken cancellationToken) =>
+    public Task<QueueTokenCounter?> FindCounterAsync(
+        Guid clinicId,
+        Guid branchId,
+        Guid doctorId,
+        DateOnly date,
+        CancellationToken cancellationToken,
+        int rangeStartMinutes = QueueTokenCounter.DayWideRangeMinutes) =>
         db.QueueTokenCounters.SingleOrDefaultAsync(
-            item => item.ClinicId == clinicId && item.BranchId == branchId && item.DoctorId == doctorId && item.OperatingDate == date,
+            item => item.ClinicId == clinicId
+                && item.BranchId == branchId
+                && item.DoctorId == doctorId
+                && item.OperatingDate == date
+                && item.RangeStartMinutes == rangeStartMinutes,
             cancellationToken);
 
     public void AddCounter(QueueTokenCounter counter) => db.QueueTokenCounters.Add(counter);

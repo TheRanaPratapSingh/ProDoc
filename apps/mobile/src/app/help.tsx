@@ -1,5 +1,5 @@
-import { HelpCenter } from '@/features/support/help-center';
+import { HelpSupportHub } from '@/features/support/help-support-hub';
 
-export default function HelpScreen() {
-  return <HelpCenter />;
+export default function HelpRoute() {
+  return <HelpSupportHub />;
 }

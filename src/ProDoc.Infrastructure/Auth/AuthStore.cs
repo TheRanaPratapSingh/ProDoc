@@ -35,7 +35,7 @@ public sealed class AuthStore(ProDocDbContext db) : IAuthStore
     {
         var normalized = phoneE164.ToUpperInvariant();
         var userId = await db.Users
-            .Where(user => user.NormalizedUserName == normalized)
+            .Where(user => user.NormalizedUserName == normalized && user.PermanentlyDeletedAtUtc == null)
             .Select(user => (Guid?)user.Id)
             .SingleOrDefaultAsync(cancellationToken);
         return userId is null ? null : await MapAccountAsync(userId.Value, cancellationToken);
@@ -73,6 +73,7 @@ public sealed class AuthStore(ProDocDbContext db) : IAuthStore
         }
 
         db.Patients.Add(Patient.Register(user.Id, now));
+        var surfaces = DashboardResolver.ListSurfaces(distinctRoles);
         return new AccountSnapshot(
             user.Id,
             phoneE164,
@@ -80,7 +81,25 @@ public sealed class AuthStore(ProDocDbContext db) : IAuthStore
             Languages.English,
             distinctRoles,
             PermissionsFor(distinctRoles),
-            null);
+            null,
+            null,
+            DashboardResolver.Resolve(distinctRoles),
+            surfaces,
+            AgeYears: null,
+            Gender: null,
+            ProfileCompleted: false);
+    }
+
+    public async Task GrantRoleAsync(Guid userId, string roleName, CancellationToken cancellationToken)
+    {
+        var normalized = roleName.ToUpperInvariant();
+        var role = await db.Roles.SingleOrDefaultAsync(item => item.NormalizedName == normalized, cancellationToken)
+            ?? throw new InvalidOperationException($"Role '{roleName}' is not seeded.");
+        var exists = await db.UserRoles.AnyAsync(item => item.UserId == userId && item.RoleId == role.Id, cancellationToken);
+        if (!exists)
+        {
+            db.UserRoles.Add(new IdentityUserRole<Guid> { UserId = userId, RoleId = role.Id });
+        }
     }
 
     public async Task UpdatePatientProfileAsync(
@@ -88,10 +107,25 @@ public sealed class AuthStore(ProDocDbContext db) : IAuthStore
         string? fullName,
         string preferredLanguage,
         DateTimeOffset now,
+        CancellationToken cancellationToken,
+        int? ageYears = null,
+        string? gender = null)
+    {
+        var patient = await TrackedPatientAsync(userId, cancellationToken);
+        patient.UpdateProfile(fullName, preferredLanguage, now, ageYears, gender);
+    }
+
+    public async Task CompletePatientProfileAsync(
+        Guid userId,
+        string fullName,
+        int ageYears,
+        string? gender,
+        string preferredLanguage,
+        DateTimeOffset now,
         CancellationToken cancellationToken)
     {
         var patient = await TrackedPatientAsync(userId, cancellationToken);
-        patient.UpdateProfile(fullName, preferredLanguage, now);
+        patient.CompleteBasicProfile(fullName, ageYears, gender, preferredLanguage, now);
     }
 
     public async Task MarkDeletionRequestedAsync(Guid userId, DateTimeOffset now, CancellationToken cancellationToken)
@@ -162,7 +196,7 @@ public sealed class AuthStore(ProDocDbContext db) : IAuthStore
         var row = await (
             from user in db.Users.AsNoTracking()
             join patient in db.Patients.AsNoTracking() on user.Id equals patient.UserId
-            where user.Id == userId
+            where user.Id == userId && user.PermanentlyDeletedAtUtc == null
             select new
             {
                 user.Id,
@@ -170,7 +204,10 @@ public sealed class AuthStore(ProDocDbContext db) : IAuthStore
                 patient.FullName,
                 patient.PreferredLanguage,
                 patient.DeletionRequestedAtUtc,
-                user.SuspendedAtUtc
+                user.SuspendedAtUtc,
+                patient.AgeYears,
+                patient.Gender,
+                patient.ProfileCompleted
             }).SingleOrDefaultAsync(cancellationToken);
 
         if (row is null)
@@ -184,6 +221,7 @@ public sealed class AuthStore(ProDocDbContext db) : IAuthStore
             where userRole.UserId == userId && role.Name != null
             select role.Name!).ToListAsync(cancellationToken);
 
+        var surfaces = DashboardResolver.ListSurfaces(roles);
         return new AccountSnapshot(
             row.Id,
             row.Phone,
@@ -192,7 +230,12 @@ public sealed class AuthStore(ProDocDbContext db) : IAuthStore
             roles,
             PermissionsFor(roles),
             row.DeletionRequestedAtUtc,
-            row.SuspendedAtUtc);
+            row.SuspendedAtUtc,
+            DashboardResolver.Resolve(roles),
+            surfaces,
+            row.AgeYears,
+            row.Gender,
+            row.ProfileCompleted);
     }
 
     private static string[] PermissionsFor(IEnumerable<string> roles) =>

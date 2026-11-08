@@ -16,11 +16,12 @@ public sealed class BookingFlowTests(ProDocApiFactory factory)
         var doctor = await SignInAsync("9000000031");
         var patient = await SignInAsync("9000000032");
         var other = await SignInAsync("9000000033");
-        var admin = await SignInAsync("9000000001");
+        var admin = await SignInAsync("9000000001", purpose: "admin");
         await SendAsync(HttpMethod.Put, "/api/v1/account/profile", patient.AccessToken, JsonContent.Create(new { fullName = "Meera Iyer", preferredLanguage = "en" }));
         var specializations = await SendAsync(HttpMethod.Get, "/api/v1/specializations", doctor.AccessToken);
         var cardiology = (await specializations.Content.ReadFromJsonAsync<SpecializationBody[]>())!.Single(item => item.Code == "cardiology");
-        var scheduleId = await PublishScheduleAsync(doctor, admin, cardiology.Id);
+        var (scheduleId, scheduleRowVersion) = await PublishScheduleAsync(doctor, admin, cardiology.Id);
+        doctor = await SignInAsync("9000000031");
         var date = ClinicDate(2);
         var open = await SlotsAsync(scheduleId, date, patient.AccessToken);
         Assert.Contains("09:00:00", open);
@@ -42,13 +43,15 @@ public sealed class BookingFlowTests(ProDocApiFactory factory)
         }));
         Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
 
-        await SendAsync(HttpMethod.Put, $"/api/v1/schedules/{scheduleId}", doctor.AccessToken, JsonContent.Create(new
+        var updatedSchedule = await ReadAsync(await SendAsync(HttpMethod.Put, $"/api/v1/schedules/{scheduleId}", doctor.AccessToken, JsonContent.Create(new
         {
             consultationFee = 800,
             slotDurationMinutes = 30,
             bufferMinutes = 0,
-            requiresApproval = false
-        }));
+            requiresApproval = false,
+            expectedRowVersion = scheduleRowVersion
+        })));
+        scheduleRowVersion = updatedSchedule.GetProperty("rowVersion").GetString()!;
         var confirmed = await ReadAsync(await SendAsync(HttpMethod.Post, $"/api/v1/appointments/{appointmentId}/confirm", patient.AccessToken, JsonContent.Create(new
         {
             reason = "Headache",
@@ -64,13 +67,15 @@ public sealed class BookingFlowTests(ProDocApiFactory factory)
         Assert.Equal("Cancelled", cancelled.GetProperty("status").GetString());
         Assert.Contains("09:00:00", await SlotsAsync(scheduleId, date, patient.AccessToken));
 
-        await SendAsync(HttpMethod.Put, $"/api/v1/schedules/{scheduleId}", doctor.AccessToken, JsonContent.Create(new
+        updatedSchedule = await ReadAsync(await SendAsync(HttpMethod.Put, $"/api/v1/schedules/{scheduleId}", doctor.AccessToken, JsonContent.Create(new
         {
             consultationFee = 800,
             slotDurationMinutes = 30,
             bufferMinutes = 0,
-            requiresApproval = true
-        }));
+            requiresApproval = true,
+            expectedRowVersion = scheduleRowVersion
+        })));
+        scheduleRowVersion = updatedSchedule.GetProperty("rowVersion").GetString()!;
         var requestedHold = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/appointments/holds", patient.AccessToken, JsonContent.Create(new
         {
             scheduleId,
@@ -88,11 +93,12 @@ public sealed class BookingFlowTests(ProDocApiFactory factory)
             fullName = "Aarav Iyer",
             relationship = "child"
         })));
+        var familyDate = ClinicDate(3);
         var familyHold = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/appointments/holds", patient.AccessToken, JsonContent.Create(new
         {
             scheduleId,
-            date = date.ToString("yyyy-MM-dd"),
-            start = "10:30:00"
+            date = familyDate.ToString("yyyy-MM-dd"),
+            start = "09:00:00"
         })));
         var familyVisit = await ReadAsync(await SendAsync(HttpMethod.Post, $"/api/v1/appointments/{familyHold.GetProperty("id").GetGuid()}/confirm", patient.AccessToken, JsonContent.Create(new
         {
@@ -102,11 +108,40 @@ public sealed class BookingFlowTests(ProDocApiFactory factory)
         Assert.Equal("Aarav Iyer", familyVisit.GetProperty("patientName").GetString());
         Assert.Equal("Requested", familyVisit.GetProperty("status").GetString());
 
+        var sameDayDuplicate = await SendAsync(HttpMethod.Post, "/api/v1/appointments/holds", patient.AccessToken, JsonContent.Create(new
+        {
+            scheduleId,
+            date = date.ToString("yyyy-MM-dd"),
+            start = "10:00:00"
+        }));
+        Assert.Equal(HttpStatusCode.Conflict, sameDayDuplicate.StatusCode);
+        var duplicateBody = await sameDayDuplicate.Content.ReadAsStringAsync();
+        Assert.Contains("duplicate_appointment", duplicateBody, StringComparison.OrdinalIgnoreCase);
+
+        var nextDay = ClinicDate(4);
+        var nextDayHold = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/appointments/holds", patient.AccessToken, JsonContent.Create(new
+        {
+            scheduleId,
+            date = nextDay.ToString("yyyy-MM-dd"),
+            start = "09:00:00"
+        })));
+        Assert.Equal("Held", nextDayHold.GetProperty("status").GetString());
+        await SendAsync(HttpMethod.Post, $"/api/v1/appointments/{nextDayHold.GetProperty("id").GetGuid()}/release", patient.AccessToken);
+
+        var otherSameDay = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/appointments/holds", other.AccessToken, JsonContent.Create(new
+        {
+            scheduleId,
+            date = date.ToString("yyyy-MM-dd"),
+            start = "10:00:00"
+        })));
+        Assert.Equal("Held", otherSameDay.GetProperty("status").GetString());
+        await SendAsync(HttpMethod.Post, $"/api/v1/appointments/{otherSameDay.GetProperty("id").GetGuid()}/release", other.AccessToken);
+
         var walkIn = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/appointments/walk-ins", doctorAgain.AccessToken, JsonContent.Create(new
         {
             scheduleId,
             date = date.ToString("yyyy-MM-dd"),
-            start = "10:00:00",
+            start = "10:30:00",
             patientName = "Walk In Guest"
         })));
         Assert.Equal("Confirmed", walkIn.GetProperty("status").GetString());
@@ -118,8 +153,10 @@ public sealed class BookingFlowTests(ProDocApiFactory factory)
         Assert.DoesNotContain("Since morning", adminList);
     }
 
-    private async Task<Guid> PublishScheduleAsync(SessionBody doctor, SessionBody admin, Guid specializationId)
+    private async Task<(Guid ScheduleId, string RowVersion)> PublishScheduleAsync(SessionBody doctor, SessionBody admin, Guid specializationId)
     {
+        await ProviderSeed.EnsureDoctorRoleAsync(_client, doctor.AccessToken, admin.AccessToken);
+        doctor = await SignInAsync("9000000031");
         await SendAsync(HttpMethod.Put, "/api/v1/doctors/me/basics", doctor.AccessToken, JsonContent.Create(new
         {
             firstName = "Kabir",
@@ -163,8 +200,8 @@ public sealed class BookingFlowTests(ProDocApiFactory factory)
         var doctorId = submitted.GetProperty("id").GetGuid();
         await SendAsync(HttpMethod.Post, $"/api/v1/admin/verifications/doctors/{doctorId}", admin.AccessToken, JsonContent.Create(new { decision = "Approve" }));
 
-        var clinic = await ReadAsync(await SendAsync(HttpMethod.Post, "/api/v1/clinics", doctor.AccessToken));
-        var clinicId = clinic.GetProperty("id").GetGuid();
+        var ownerUserId = await ProviderSeed.GetUserIdAsync(_client, doctor.AccessToken);
+        var clinicId = await ProviderSeed.CreateClinicOwnedByAsync(_client, admin.AccessToken, ownerUserId);
         await SendAsync(HttpMethod.Put, $"/api/v1/clinics/{clinicId}", doctor.AccessToken, JsonContent.Create(new
         {
             name = "Shah Clinic",
@@ -195,13 +232,19 @@ public sealed class BookingFlowTests(ProDocApiFactory factory)
             slotDurationMinutes = 30
         })));
         var scheduleId = created.GetProperty("id").GetGuid();
+        var rowVersion = created.GetProperty("rowVersion").GetString();
         var days = Enum.GetNames<DayOfWeek>();
-        await SendAsync(HttpMethod.Put, $"/api/v1/schedules/{scheduleId}/hours", doctor.AccessToken, JsonContent.Create(new
+        var withHours = await ReadAsync(await SendAsync(HttpMethod.Put, $"/api/v1/schedules/{scheduleId}/hours", doctor.AccessToken, JsonContent.Create(new
         {
+            expectedRowVersion = rowVersion,
             periods = days.Select(day => new { day, startsAt = "09:00", endsAt = "11:00" })
-        }));
-        await SendAsync(HttpMethod.Post, $"/api/v1/schedules/{scheduleId}/publication", doctor.AccessToken, JsonContent.Create(new { isPublished = true }));
-        return scheduleId;
+        })));
+        var published = await ReadAsync(await SendAsync(HttpMethod.Post, $"/api/v1/schedules/{scheduleId}/publication", doctor.AccessToken, JsonContent.Create(new
+        {
+            isPublished = true,
+            expectedRowVersion = withHours.GetProperty("rowVersion").GetString()
+        })));
+        return (scheduleId, published.GetProperty("rowVersion").GetString()!);
     }
 
     private static DateOnly ClinicDate(int daysAhead)
@@ -215,16 +258,25 @@ public sealed class BookingFlowTests(ProDocApiFactory factory)
     private async Task<string[]> SlotsAsync(Guid scheduleId, DateOnly date, string accessToken)
     {
         var body = await ReadAsync(await SendAsync(HttpMethod.Get, $"/api/v1/schedules/{scheduleId}/slots?date={date:yyyy-MM-dd}", accessToken));
-        return body.GetProperty("slots").EnumerateArray().Select(slot => slot.GetProperty("start").GetString()!).ToArray();
+        return body.GetProperty("slots").EnumerateArray()
+            .Where(slot => !slot.TryGetProperty("available", out var available) || available.GetBoolean())
+            .Select(slot => slot.GetProperty("start").GetString()!)
+            .ToArray();
     }
 
-    private async Task<SessionBody> SignInAsync(string phone)
+    private async Task<SessionBody> SignInAsync(string phone, string? purpose = null)
     {
-        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone });
+        var otpResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/request", new { phoneNumber = phone, purpose });
         var otpBody = await otpResponse.Content.ReadAsStringAsync();
         Assert.True(otpResponse.IsSuccessStatusCode, otpBody);
         var otp = JsonSerializer.Deserialize<OtpBody>(otpBody, new JsonSerializerOptions(JsonSerializerDefaults.Web));
-        var verifyResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/verify", new { phoneNumber = phone, code = otp!.DevelopmentCode, deviceName = "integration-test" });
+        var verifyResponse = await _client.PostAsJsonAsync("/api/v1/auth/otp/verify", new
+        {
+            phoneNumber = phone,
+            code = otp!.DevelopmentCode,
+            deviceName = "integration-test",
+            purpose
+        });
         var verifyBody = await verifyResponse.Content.ReadAsStringAsync();
         Assert.True(verifyResponse.IsSuccessStatusCode, verifyBody);
         return JsonSerializer.Deserialize<SessionBody>(verifyBody, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;

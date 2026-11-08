@@ -1,4 +1,5 @@
 using FluentValidation;
+using ProDoc.Api.Validation;
 
 namespace ProDoc.Api.Contracts;
 
@@ -15,7 +16,7 @@ public sealed class AssignStaffRequestValidator : AbstractValidator<AssignStaffR
 {
     public AssignStaffRequestValidator()
     {
-        RuleFor(request => request.PhoneNumber).NotEmpty().MaximumLength(20);
+        RuleFor(request => request.PhoneNumber).NotEmpty().MaximumLength(20).MustBeIndianMobile();
         RuleFor(request => request.Role).Must(value => value is "Receptionist" or "ClinicStaff");
     }
 }
@@ -77,7 +78,7 @@ public sealed class DeskWalkInRequestValidator : AbstractValidator<DeskWalkInReq
     {
         RuleFor(request => request.DoctorId).NotEmpty();
         RuleFor(request => request.PatientName).MinimumLength(2).MaximumLength(80);
-        RuleFor(request => request.ContactNumber).MaximumLength(20);
+        RuleFor(request => request.ContactNumber).MaximumLength(20).MustBeIndianMobileWhenPresent();
         RuleFor(request => request.Reason).MaximumLength(120);
         RuleFor(request => request.ConsultationFee).InclusiveBetween(0, 100_000);
     }

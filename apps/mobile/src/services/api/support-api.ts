@@ -159,3 +159,55 @@ export function disputeAction(
 export function getSupportAnalytics() {
   return withAuthRetry(async () => (await api.get<SupportAnalytics>('/api/v1/admin/support/analytics')).data);
 }
+
+export type SupportIssueType = {
+  code: string;
+  labelEn: string;
+  labelHi: string;
+  ticketCategory: string;
+  defaultPriority: string;
+};
+
+export type SupportTopic = {
+  code: string;
+  titleEn: string;
+  titleHi: string;
+  bodyEn: string;
+  bodyHi: string;
+  helpCategoryCode: string;
+  issueTypes: SupportIssueType[];
+  roles: string[];
+};
+
+export type SupportCatalog = {
+  topics: SupportTopic[];
+  supportEmail: string;
+  supportPhone: string;
+  liveAgentsAvailable: boolean;
+};
+
+export function getSupportCatalog() {
+  return withAuthRetry(async () => (await api.get<SupportCatalog>('/api/v1/support/catalog')).data);
+}
+
+export function submitHelpArticleFeedback(slugOrId: string, wasHelpful: boolean) {
+  return withAuthRetry(
+    async () =>
+      (await api.post<{ articleId: string; wasHelpful: boolean }>(`/api/v1/help/articles/${slugOrId}/feedback`, {
+        wasHelpful,
+      })).data,
+  );
+}
+
+export function closeSupportTicket(ticketId: string) {
+  return withAuthRetry(
+    async () => (await api.post<SupportTicketDetails>(`/api/v1/support/tickets/${ticketId}/close`)).data,
+  );
+}
+
+export function reopenSupportTicket(ticketId: string, body?: string) {
+  return withAuthRetry(
+    async () =>
+      (await api.post<SupportTicketDetails>(`/api/v1/support/tickets/${ticketId}/reopen`, body ? { body } : {})).data,
+  );
+}

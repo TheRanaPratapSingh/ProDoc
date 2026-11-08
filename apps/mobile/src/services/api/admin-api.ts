@@ -148,8 +148,230 @@ export async function getAdminDashboard(params?: {
   return withAuthRetry(async () => (await api.get<AdminDashboard>('/api/v1/admin/dashboard', { params })).data);
 }
 
-export async function searchAdminUsers(params?: { q?: string; role?: string; suspended?: boolean }) {
+export async function searchAdminUsers(params?: {
+  q?: string;
+  role?: string;
+  suspended?: boolean;
+  clinicId?: string;
+}) {
   return withAuthRetry(async () => (await api.get<AdminUser[]>('/api/v1/admin/users', { params })).data);
+}
+
+export type AdminUserClinicLink = {
+  clinicId: string;
+  clinicName: string;
+  role: string;
+  isActive: boolean;
+};
+
+export type AdminUserDoctorLink = {
+  doctorId: string;
+  doctorName: string;
+  clinicId: string;
+  clinicName: string;
+};
+
+export type AdminUserDetails = {
+  userId: string;
+  phoneNumber: string;
+  fullName: string | null;
+  email: string | null;
+  roles: string[];
+  createdAtUtc: string;
+  suspendedAtUtc: string | null;
+  deletionRequestedAtUtc: string | null;
+  doctorId: string | null;
+  doctorStatus: string | null;
+  primarySpecialization: string | null;
+  qualifications: string | null;
+  registrationNumber: string | null;
+  yearsOfExperience: number | null;
+  clinics: AdminUserClinicLink[];
+  assignedDoctors: AdminUserDoctorLink[];
+};
+
+export async function getAdminUser(userId: string) {
+  return withAuthRetry(async () => (await api.get<AdminUserDetails>(`/api/v1/admin/users/${userId}`)).data);
+}
+
+export async function deleteAdminUser(userId: string) {
+  return withAuthRetry(async () => {
+    await api.delete(`/api/v1/admin/users/${userId}`);
+  });
+}
+
+export type AdminClinicSummary = {
+  id: string;
+  reference: string;
+  name: string | null;
+  status: string;
+  phoneNumber: string | null;
+  email: string | null;
+  city: string | null;
+  state: string | null;
+  doctorCount: number;
+  staffCount: number;
+  updatedAtUtc: string;
+};
+
+export type AdminClinicMember = {
+  userId: string;
+  doctorId: string | null;
+  fullName: string;
+  phoneNumber: string;
+  role: string;
+  designation: string | null;
+  isActive: boolean;
+};
+
+export type AdminClinicBranch = {
+  id: string;
+  name: string;
+  addressLine: string;
+  addressLine2: string | null;
+  landmark?: string | null;
+  locality?: string | null;
+  city: string;
+  district?: string | null;
+  state: string;
+  postalCode: string;
+  country?: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  googlePlaceId?: string | null;
+  formattedAddress?: string | null;
+  phoneNumber: string | null;
+  isPrimary: boolean;
+  isActive: boolean;
+  locationVerified?: boolean;
+};
+
+export type AdminClinicDetails = {
+  id: string;
+  reference: string;
+  name: string | null;
+  type: string | null;
+  status: string;
+  phoneNumber: string | null;
+  email: string | null;
+  website: string | null;
+  description: string | null;
+  registrationNumber: string | null;
+  ownerUserId: string;
+  branches: AdminClinicBranch[];
+  doctors: AdminClinicMember[];
+  staff: AdminClinicMember[];
+  createdAtUtc: string;
+  updatedAtUtc: string;
+};
+
+export async function listAdminClinics(q?: string) {
+  return withAuthRetry(async () => (await api.get<AdminClinicSummary[]>('/api/v1/admin/clinics', { params: { q } })).data);
+}
+
+export async function getAdminClinic(clinicId: string) {
+  return withAuthRetry(async () => (await api.get<AdminClinicDetails>(`/api/v1/admin/clinics/${clinicId}`)).data);
+}
+
+export async function createAdminClinic(body: {
+  name: string;
+  type: string;
+  phoneNumber: string;
+  email?: string | null;
+  website?: string | null;
+  description?: string | null;
+  registrationNumber?: string | null;
+  branchName?: string | null;
+  addressLine: string;
+  addressLine2?: string | null;
+  landmark?: string | null;
+  locality?: string | null;
+  city: string;
+  district?: string | null;
+  state: string;
+  postalCode: string;
+  country?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  googlePlaceId?: string | null;
+  branchPhoneNumber?: string | null;
+}) {
+  return withAuthRetry(async () => (await api.post<AdminClinicDetails>('/api/v1/admin/clinics', body)).data);
+}
+
+export async function updateAdminClinicBranch(
+  clinicId: string,
+  branchId: string,
+  body: {
+    name: string;
+    addressLine: string;
+    addressLine2?: string | null;
+    landmark?: string | null;
+    locality?: string | null;
+    city: string;
+    district?: string | null;
+    state: string;
+    postalCode: string;
+    country?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    googlePlaceId?: string | null;
+    phoneNumber?: string | null;
+    isPrimary: boolean;
+  },
+) {
+  return withAuthRetry(
+    async () => (await api.put<AdminClinicDetails>(`/api/v1/admin/clinics/${clinicId}/branches/${branchId}`, body)).data,
+  );
+}
+
+export async function updateAdminClinic(
+  clinicId: string,
+  body: {
+    name: string;
+    type: string;
+    phoneNumber: string;
+    email?: string | null;
+    website?: string | null;
+    description?: string | null;
+    registrationNumber?: string | null;
+  },
+) {
+  return withAuthRetry(async () => (await api.put<AdminClinicDetails>(`/api/v1/admin/clinics/${clinicId}`, body)).data);
+}
+
+export async function assignAdminClinicDoctor(clinicId: string, doctorId: string) {
+  return withAuthRetry(async () => {
+    await api.post(`/api/v1/admin/clinics/${clinicId}/doctors/${doctorId}`);
+  });
+}
+
+/** Approve a doctor for patient discovery and ensure a published clinic schedule. */
+export async function activateAdminDoctorDiscovery(doctorId: string) {
+  return withAuthRetry(async () => {
+    await api.post(`/api/v1/admin/doctors/${doctorId}/activate-discovery`);
+  });
+}
+
+export async function removeAdminClinicDoctor(clinicId: string, doctorId: string) {
+  return withAuthRetry(async () => {
+    await api.delete(`/api/v1/admin/clinics/${clinicId}/doctors/${doctorId}`);
+  });
+}
+
+export async function assignAdminClinicStaff(
+  clinicId: string,
+  body: { userId: string; roleName: string; branchId?: string | null; doctorIds?: string[] },
+) {
+  return withAuthRetry(async () => {
+    await api.post(`/api/v1/admin/clinics/${clinicId}/staff`, body);
+  });
+}
+
+export async function removeAdminClinicStaff(clinicId: string, userId: string) {
+  return withAuthRetry(async () => {
+    await api.delete(`/api/v1/admin/clinics/${clinicId}/staff/${userId}`);
+  });
 }
 
 export async function suspendUser(userId: string, reason?: string) {
@@ -173,6 +395,84 @@ export async function grantUserRole(userId: string, roleName: string) {
 export async function revokeUserRole(userId: string, roleName: string) {
   return withAuthRetry(async () => {
     await api.delete(`/api/v1/admin/users/${userId}/roles/${encodeURIComponent(roleName)}`);
+  });
+}
+
+export type StaffInvitation = {
+  id: string;
+  phoneNumber: string;
+  fullName: string;
+  email: string | null;
+  roleName: string;
+  clinicId: string | null;
+  branchId: string | null;
+  status: string;
+  createdAtUtc: string;
+  expiresAtUtc: string;
+  acceptedAtUtc: string | null;
+  specializationId?: string | null;
+  qualifications?: string | null;
+  registrationNumber?: string | null;
+  designation?: string | null;
+  clinicIds?: string[] | null;
+  doctorIds?: string[] | null;
+  otpExpiresAtUtc?: string | null;
+  developmentCode?: string | null;
+  otpChallengeId?: string | null;
+};
+
+export type StaffInviteActivation = {
+  invitationId: string;
+  userId: string;
+  fullName: string;
+  phoneNumber: string;
+  roleName: string;
+  clinicIds: string[];
+  doctorId?: string | null;
+  doctorStatus?: string | null;
+  isPubliclyDiscoverable?: boolean;
+};
+
+export async function listStaffInvitations(status?: string) {
+  return withAuthRetry(
+    async () => (await api.get<StaffInvitation[]>('/api/v1/admin/invitations', { params: { status } })).data,
+  );
+}
+
+export async function inviteStaff(body: {
+  fullName: string;
+  phoneNumber: string;
+  email?: string | null;
+  roleName: string;
+  clinicId?: string | null;
+  branchId?: string | null;
+  specializationId?: string | null;
+  yearsOfExperience?: number | null;
+  qualifications?: string | null;
+  registrationNumber?: string | null;
+  designation?: string | null;
+  clinicIds?: string[];
+  doctorIds?: string[];
+}) {
+  return withAuthRetry(async () => (await api.post<StaffInvitation>('/api/v1/admin/invitations', body)).data);
+}
+
+export async function resendStaffInvitation(invitationId: string) {
+  return withAuthRetry(
+    async () => (await api.post<StaffInvitation>(`/api/v1/admin/invitations/${invitationId}/resend`)).data,
+  );
+}
+
+export async function verifyStaffInvitation(invitationId: string, code: string) {
+  return withAuthRetry(
+    async () =>
+      (await api.post<StaffInviteActivation>(`/api/v1/admin/invitations/${invitationId}/verify`, { code })).data,
+  );
+}
+
+export async function cancelStaffInvitation(invitationId: string) {
+  return withAuthRetry(async () => {
+    await api.post(`/api/v1/admin/invitations/${invitationId}/cancel`);
   });
 }
 
@@ -249,6 +549,8 @@ export async function createSupportTicket(body: {
   appointmentId?: string;
   paymentId?: string;
   clinicId?: string;
+  issueType?: string;
+  createdByRole?: string;
 }) {
   return withAuthRetry(async () => (await api.post<SupportTicketDetails>('/api/v1/support/tickets', body)).data);
 }

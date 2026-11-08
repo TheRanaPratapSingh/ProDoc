@@ -3,6 +3,7 @@ using ProDoc.Application.Abstractions;
 using ProDoc.Application.Admin;
 using ProDoc.Application.Automation;
 using ProDoc.Application.Billing;
+using ProDoc.Application.Notifications;
 using ProDoc.Application.Providers;
 using ProDoc.Domain.Admin;
 using ProDoc.Domain.Automation;
@@ -19,10 +20,12 @@ public sealed class SupportService(
     ISupportFileStore files,
     FinanceService finance,
     IAutomationEventBus automation,
+    NotificationService notifications,
     IClock clock,
     ILogger<SupportService> logger)
 {
-    private static readonly TimeSpan NotificationCooldown = TimeSpan.FromMinutes(2);
+    private const string DefaultSupportEmail = "support@prodoc.app";
+    private const string DefaultSupportPhone = "+91-1800-000-000";
 
     public async Task SeedHelpCenterAsync(CancellationToken cancellationToken)
     {
@@ -214,6 +217,28 @@ public sealed class SupportService(
         return MapArticle(article, category?.Code ?? string.Empty);
     }
 
+    public SupportCatalogDetails GetCatalog(string? primaryRole) =>
+        SupportCatalog.Build(primaryRole, DefaultSupportEmail, DefaultSupportPhone, liveAgentsAvailable: false);
+
+    public async Task<HelpArticleFeedbackResult> SubmitArticleFeedbackAsync(
+        Guid? userId,
+        string slugOrId,
+        bool wasHelpful,
+        CancellationToken cancellationToken)
+    {
+        var article = Guid.TryParse(slugOrId, out var id)
+            ? await store.FindArticleAsync(id, false, cancellationToken)
+            : await store.FindArticleBySlugAsync(slugOrId.Trim().ToLowerInvariant(), cancellationToken);
+        if (article is null || !article.IsPublished)
+        {
+            throw DomainException.NotFound("help_article_not_found", "That help article was not found.");
+        }
+
+        store.AddArticleFeedback(HelpArticleFeedback.Create(article.Id, userId, wasHelpful, clock.UtcNow));
+        await store.SaveChangesAsync(cancellationToken);
+        return new HelpArticleFeedbackResult(article.Id, wasHelpful, wasHelpful ? 1 : 0, wasHelpful ? 0 : 1);
+    }
+
     public async Task<SupportTicketDetails> CreateTicketAsync(
         Guid userId,
         string category,
@@ -224,12 +249,19 @@ public sealed class SupportService(
         Guid? paymentId,
         Guid? clinicId,
         RequestMetadata metadata,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? issueType = null,
+        string? createdByRole = null)
     {
         if (!Enum.TryParse<SupportTicketCategory>(category, true, out var parsedCategory)
             || !Enum.TryParse<SupportTicketPriority>(priority, true, out var parsedPriority))
         {
             throw DomainException.Validation("ticket_category_invalid", "Choose a valid category and priority.");
+        }
+
+        if (await store.HasRecentSimilarTicketAsync(userId, subject, clock.UtcNow.AddMinutes(-2), cancellationToken))
+        {
+            throw DomainException.Conflict("ticket_duplicate", "That support request was just submitted. Check My Support Requests.");
         }
 
         var number = await store.NextTicketNumberAsync(cancellationToken);
@@ -243,13 +275,93 @@ public sealed class SupportService(
             clock.UtcNow,
             appointmentId,
             paymentId,
-            clinicId);
+            clinicId,
+            createdByRole,
+            issueType);
         store.AddTicket(ticket);
         await store.AddStatusHistoryAsync(
             TicketStatusHistory.Record(ticket.Id, userId, "None", ticket.Status.ToString(), "Ticket created", clock.UtcNow),
             cancellationToken);
         await store.AddAuditAsync(Audit(userId, AuditActions.SupportTicketCreated, metadata), cancellationToken);
         await NotifyAsync(userId, "support.ticket.created", ticket.Id, "Support ticket created", $"Ticket {ticket.Number} was created.", cancellationToken);
+
+        var agents = await store.ListPlatformAdminUserIdsAsync(cancellationToken);
+        if (agents.Count > 0)
+        {
+            await notifications.NotifyUsersAsync(
+                agents.Where(id => id != userId),
+                "support.ticket.created",
+                ticket.Id,
+                "New support ticket",
+                $"Ticket {ticket.Number} needs attention.",
+                essential: true,
+                cancellationToken);
+        }
+
+        await store.SaveChangesAsync(cancellationToken);
+        return await MapTicketAsync(ticket, includeInternal: false, cancellationToken);
+    }
+
+    public async Task<SupportTicketDetails> CloseTicketAsync(
+        Guid userId,
+        Guid ticketId,
+        RequestMetadata metadata,
+        CancellationToken cancellationToken)
+    {
+        var ticket = await store.FindTicketAsync(ticketId, true, cancellationToken)
+            ?? throw DomainException.NotFound("ticket_not_found", "That support ticket was not found.");
+        if (ticket.CreatedByUserId != userId)
+        {
+            throw DomainException.NotFound("ticket_not_found", "That support ticket was not found.");
+        }
+
+        var previous = ticket.Status.ToString();
+        ticket.CloseByOwner(clock.UtcNow);
+        await store.AddStatusHistoryAsync(
+            TicketStatusHistory.Record(ticket.Id, userId, previous, ticket.Status.ToString(), "Closed by user", clock.UtcNow),
+            cancellationToken);
+        await store.AddAuditAsync(Audit(userId, AuditActions.SupportTicketUpdated, metadata), cancellationToken);
+        await NotifyAsync(userId, "support.ticket.status", ticket.Id, "Support ticket closed", $"Ticket {ticket.Number} was closed.", cancellationToken);
+        if (ticket.AssignedToUserId is Guid agentId)
+        {
+            await NotifyAsync(agentId, "support.ticket.status", ticket.Id, "Ticket closed by user", $"Ticket {ticket.Number} was closed by the requester.", cancellationToken);
+        }
+
+        await store.SaveChangesAsync(cancellationToken);
+        return await MapTicketAsync(ticket, includeInternal: false, cancellationToken);
+    }
+
+    public async Task<SupportTicketDetails> ReopenTicketAsync(
+        Guid userId,
+        Guid ticketId,
+        string? note,
+        RequestMetadata metadata,
+        CancellationToken cancellationToken)
+    {
+        var ticket = await store.FindTicketAsync(ticketId, true, cancellationToken)
+            ?? throw DomainException.NotFound("ticket_not_found", "That support ticket was not found.");
+        if (ticket.CreatedByUserId != userId)
+        {
+            throw DomainException.NotFound("ticket_not_found", "That support ticket was not found.");
+        }
+
+        var previous = ticket.Status.ToString();
+        ticket.Reopen(clock.UtcNow);
+        await store.AddStatusHistoryAsync(
+            TicketStatusHistory.Record(ticket.Id, userId, previous, ticket.Status.ToString(), note ?? "Reopened by user", clock.UtcNow),
+            cancellationToken);
+        if (!string.IsNullOrWhiteSpace(note))
+        {
+            store.AddTicketNote(ticket.AddNote(userId, note, isInternal: false, clock.UtcNow));
+        }
+
+        await store.AddAuditAsync(Audit(userId, AuditActions.SupportTicketUpdated, metadata), cancellationToken);
+        await NotifyAsync(userId, "support.ticket.status", ticket.Id, "Support ticket reopened", $"Ticket {ticket.Number} was reopened.", cancellationToken);
+        if (ticket.AssignedToUserId is Guid agentId)
+        {
+            await NotifyAsync(agentId, "support.ticket.status", ticket.Id, "Ticket reopened", $"Ticket {ticket.Number} was reopened by the requester.", cancellationToken);
+        }
+
         await store.SaveChangesAsync(cancellationToken);
         return await MapTicketAsync(ticket, includeInternal: false, cancellationToken);
     }
@@ -281,25 +393,29 @@ public sealed class SupportService(
 
         var mode = (filter ?? "open").Trim().ToLowerInvariant();
         var open = await store.QueryTicketsAsync(null, null, SupportTicketStatus.Open, null, false, false, 200, cancellationToken);
+        var assigned = await store.QueryTicketsAsync(null, null, SupportTicketStatus.Assigned, null, false, false, 200, cancellationToken);
+        var inProgress = await store.QueryTicketsAsync(null, null, SupportTicketStatus.InProgress, null, false, false, 200, cancellationToken);
         var pending = await store.QueryTicketsAsync(null, null, SupportTicketStatus.WaitingOnUser, null, false, false, 200, cancellationToken);
         var high = await store.QueryTicketsAsync(null, null, null, SupportTicketPriority.High, false, false, 200, cancellationToken);
         var mine = await store.QueryTicketsAsync(null, agentUserId, null, null, false, false, 200, cancellationToken);
         var overdue = await store.QueryTicketsAsync(null, null, null, null, true, false, 200, cancellationToken);
+        var openLike = open.Concat(assigned).GroupBy(item => item.Id).Select(group => group.First()).ToArray();
 
         IReadOnlyList<SupportTicket> focus = mode switch
         {
             "pending" => pending,
             "high" => high,
             "assigned" => mine,
+            "inprogress" => inProgress,
             "overdue" => overdue,
             "all" => await store.QueryTicketsAsync(null, null, parsedStatus, minPriority, false, false, 200, cancellationToken),
-            _ => open
+            _ => openLike
         };
 
         return new AgentTicketWorkspace(
-            open.Count,
+            openLike.Length,
             pending.Count,
-            high.Count(item => item.Status is SupportTicketStatus.Open or SupportTicketStatus.InProgress or SupportTicketStatus.WaitingOnUser),
+            high.Count(item => item.Status is SupportTicketStatus.Open or SupportTicketStatus.Assigned or SupportTicketStatus.InProgress or SupportTicketStatus.WaitingOnUser),
             mine.Count(item => item.Status is not (SupportTicketStatus.Resolved or SupportTicketStatus.Closed)),
             overdue.Count,
             focus.Select(MapSummary).ToArray());
@@ -376,6 +492,23 @@ public sealed class SupportService(
         if (assignedToUserId.HasValue)
         {
             ticket.Assign(assignedToUserId.Value == Guid.Empty ? null : assignedToUserId, clock.UtcNow);
+            if (ticket.AssignedToUserId is Guid assignee)
+            {
+                await NotifyAsync(
+                    ticket.CreatedByUserId,
+                    "support.ticket.assigned",
+                    ticket.Id,
+                    "Support ticket assigned",
+                    $"Ticket {ticket.Number} was assigned to a support agent.",
+                    cancellationToken);
+                await NotifyAsync(
+                    assignee,
+                    "support.ticket.assigned",
+                    ticket.Id,
+                    "Ticket assigned to you",
+                    $"Ticket {ticket.Number} was assigned to you.",
+                    cancellationToken);
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(note))
@@ -631,16 +764,8 @@ public sealed class SupportService(
     public Task<SupportAnalytics> AnalyticsAsync(CancellationToken cancellationToken) =>
         store.BuildAnalyticsAsync(clock.UtcNow.AddDays(-30), cancellationToken);
 
-    private async Task NotifyAsync(Guid userId, string kind, Guid subjectId, string title, string body, CancellationToken cancellationToken)
-    {
-        var since = clock.UtcNow.Subtract(NotificationCooldown);
-        if (await store.HasRecentNotificationAsync(userId, kind, subjectId, since, cancellationToken))
-        {
-            return;
-        }
-
-        await store.NotifyAsync(UserNotification.Create(userId, kind, subjectId, title, body, clock.UtcNow), cancellationToken);
-    }
+    private Task NotifyAsync(Guid userId, string kind, Guid subjectId, string title, string body, CancellationToken cancellationToken) =>
+        notifications.NotifyUsersAsync([userId], kind, subjectId, title, body, essential: true, cancellationToken);
 
     private async Task<SupportTicketDetails> MapTicketAsync(SupportTicket ticket, bool includeInternal, CancellationToken cancellationToken)
     {
@@ -679,7 +804,9 @@ public sealed class SupportService(
             ticket.DueAtUtc,
             includeInternal ? ticket.ResolutionDetails : null,
             attachments,
-            history);
+            history,
+            ticket.IssueType,
+            ticket.CreatedByRole);
     }
 
     private SupportTicketSummary MapSummary(SupportTicket ticket) =>

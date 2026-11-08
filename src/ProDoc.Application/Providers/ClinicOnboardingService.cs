@@ -31,9 +31,10 @@ public sealed class ClinicOnboardingService(
         return clinics.Select(clinic => ProviderMapper.ToClinic(clinic, today)).ToArray();
     }
 
-    public async Task<ClinicProfile> CreateAsync(Guid userId, CancellationToken cancellationToken)
+    public async Task<ClinicProfile> CreateAsync(Guid actorUserId, Guid? ownerUserId, CancellationToken cancellationToken)
     {
-        var clinic = Clinic.Begin(userId, clock.UtcNow);
+        var ownerId = ownerUserId is Guid specified && specified != Guid.Empty ? specified : actorUserId;
+        var clinic = Clinic.Begin(ownerId, clock.UtcNow);
         await store.AddClinicAsync(clinic, cancellationToken);
         await store.SaveChangesAsync(cancellationToken);
         return ProviderMapper.ToClinic(clinic, Today);
@@ -88,10 +89,31 @@ public sealed class ClinicOnboardingService(
         decimal? longitude,
         string? phoneNumber,
         bool isPrimary,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? landmark = null,
+        string? locality = null,
+        string? district = null,
+        string? country = null,
+        string? googlePlaceId = null)
     {
         var clinic = await OwnedClinicAsync(userId, clinicId, cancellationToken);
-        clinic.AddBranch(name, addressLine, addressLine2, city, state, postalCode, latitude, longitude, phoneNumber, isPrimary, clock.UtcNow);
+        clinic.AddBranch(
+            name,
+            addressLine,
+            addressLine2,
+            city,
+            state,
+            postalCode,
+            latitude,
+            longitude,
+            phoneNumber,
+            isPrimary,
+            clock.UtcNow,
+            landmark,
+            locality,
+            district,
+            country,
+            googlePlaceId);
         await store.SaveChangesAsync(cancellationToken);
         return ProviderMapper.ToClinic(clinic, Today);
     }
@@ -110,7 +132,12 @@ public sealed class ClinicOnboardingService(
         decimal? longitude,
         string? phoneNumber,
         bool isPrimary,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? landmark = null,
+        string? locality = null,
+        string? district = null,
+        string? country = null,
+        string? googlePlaceId = null)
     {
         var clinic = await OwnedClinicAsync(userId, clinicId, cancellationToken);
         clinic.UpdateBranch(
@@ -125,7 +152,12 @@ public sealed class ClinicOnboardingService(
             longitude,
             phoneNumber,
             isPrimary,
-            clock.UtcNow);
+            clock.UtcNow,
+            landmark,
+            locality,
+            district,
+            country,
+            googlePlaceId);
         await store.SaveChangesAsync(cancellationToken);
         return ProviderMapper.ToClinic(clinic, Today);
     }

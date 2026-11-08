@@ -14,11 +14,15 @@ public interface IAdminStore
         string? appointmentStatus,
         CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<AdminUserSummary>> SearchUsersAsync(string? query, string? role, bool? suspended, int take, CancellationToken cancellationToken);
+    Task<IReadOnlyList<AdminUserSummary>> SearchUsersAsync(string? query, string? role, bool? suspended, Guid? clinicId, int take, CancellationToken cancellationToken);
+
+    Task<AdminUserDetails?> GetUserDetailsAsync(Guid userId, CancellationToken cancellationToken);
+
+    Task PermanentDeleteUserAsync(Guid userId, DateTimeOffset now, CancellationToken cancellationToken);
 
     Task SuspendUserAsync(Guid userId, string? reason, DateTimeOffset now, CancellationToken cancellationToken);
 
-    Task ReactivateUserAsync(Guid userId, CancellationToken cancellationToken);
+    Task ReactivateUserAsync(Guid userId, DateTimeOffset now, CancellationToken cancellationToken);
 
     Task RevokeRefreshTokensAsync(Guid userId, DateTimeOffset now, CancellationToken cancellationToken);
 

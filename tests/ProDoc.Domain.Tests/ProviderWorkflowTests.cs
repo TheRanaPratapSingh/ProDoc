@@ -73,6 +73,29 @@ public sealed class ProviderWorkflowTests
     }
 
     [Fact]
+    public void Invite_provisioning_allows_a_single_display_name_without_last_name()
+    {
+        var doctor = Doctor.Begin(Guid.NewGuid(), "en", Now);
+        doctor.UpdateBasics("Akash", null, null, null, null, "en", Now);
+        doctor.UpdateProfessional("Akash", null, 5, ["en"], null, Now);
+        doctor.SetSpecializations([Cardiology], Cardiology, Now);
+        doctor.UpdateRegistration(
+            "MCI-AKASH",
+            "National Medical Commission",
+            "India",
+            "permanent",
+            new DateOnly(2018, 1, 1),
+            null,
+            Now);
+
+        doctor.ProvisionApproved(Now);
+
+        Assert.Equal(VerificationStatus.Approved, doctor.Status);
+        Assert.Equal("Akash", doctor.DisplayName);
+        Assert.True(doctor.IsPubliclyBookable(DateOnly.FromDateTime(Now.UtcDateTime)));
+    }
+
+    [Fact]
     public void Clinic_submission_requires_a_branch_and_registration_unless_it_is_an_individual_practice()
     {
         var clinic = Clinic.Begin(Guid.NewGuid(), Now);

@@ -6,6 +6,7 @@ using ProDoc.Application.Automation;
 using ProDoc.Application.Enterprise;
 using ProDoc.Application.Growth;
 using ProDoc.Application.Providers;
+using ProDoc.Application.Queue;
 using ProDoc.Domain.Appointments;
 using ProDoc.Domain.Automation;
 using ProDoc.Domain.Billing;
@@ -25,6 +26,7 @@ public sealed class FinanceService(
     IClock clock,
     GrowthService growth,
     EnterpriseService enterprise,
+    IClinicAccess clinicAccess,
     IAutomationEventBus automation,
     ILogger<FinanceService> logger)
 {
@@ -233,7 +235,7 @@ public sealed class FinanceService(
     {
         var appointment = await store.FindAppointmentAsync(appointmentId, true, cancellationToken)
             ?? throw DomainException.NotFound("appointment_not_found", "That appointment was not found.");
-        await EnsureClinicOwnerOrDoctorAsync(userId, appointment, cancellationToken);
+        await EnsureClinicOwnerDoctorOrDeskAsync(userId, appointment, cancellationToken);
         var paid = await store.FindPaidPaymentForAppointmentAsync(appointmentId, cancellationToken);
         if (paid is not null)
         {
@@ -257,6 +259,7 @@ public sealed class FinanceService(
         store.AddPayment(payment);
         await IssuePatientReceiptAsync(payment, appointment, cancellationToken);
         await store.AddAuditAsync(Audit(userId, AuditActions.PaymentPaid, metadata), cancellationToken);
+        await store.AddAuditAsync(Audit(userId, AuditActions.DeskCollectionRecorded, metadata), cancellationToken);
         await store.SaveChangesAsync(cancellationToken);
         await growth.OnPaymentPaidAsync(appointment.Id, payment.Id, cancellationToken);
         return MapPayment(payment);
@@ -499,6 +502,14 @@ public sealed class FinanceService(
         return await store.BuildClinicDashboardAsync(clinicId, cancellationToken);
     }
 
+    public async Task<DoctorEarningsDashboard> DoctorEarningsAsync(Guid userId, Guid? clinicId, CancellationToken cancellationToken)
+    {
+        var doctor = await store.FindDoctorByUserAsync(userId, cancellationToken)
+            ?? throw DomainException.NotFound("doctor_not_found", "Start a doctor profile first.");
+        var today = DateOnly.FromDateTime(clock.UtcNow.UtcDateTime);
+        return await store.BuildDoctorEarningsAsync(doctor.Id, clinicId, today, cancellationToken);
+    }
+
     public Task<AdminFinanceDashboard> AdminDashboardAsync(CancellationToken cancellationToken) =>
         store.BuildAdminDashboardAsync(cancellationToken);
 
@@ -588,13 +599,17 @@ public sealed class FinanceService(
                     accountUserId = payment.AccountUserId,
                     userId = payment.AccountUserId,
                     amount = payment.Amount,
-                    status = payment.Status.ToString()
+                    status = payment.Status.ToString(),
+                    clinicId = appointment?.ClinicId,
+                    doctorId = appointment?.DoctorId,
+                    branchId = appointment?.BranchId,
+                    patientName = appointment?.PatientName,
+                    reference = appointment?.Reference
                 },
                 $"{eventType}:{payment.Id:N}:{payment.UpdatedAtUtc.UtcTicks}",
                 cancellationToken,
-                subjectId: payment.Id,
+                subjectId: payment.AppointmentId,
                 userId: payment.AccountUserId);
-            _ = appointment;
         }
         catch (Exception ex)
         {
@@ -687,6 +702,26 @@ public sealed class FinanceService(
         {
             throw DomainException.NotFound("appointment_not_found", "That appointment was not found.");
         }
+    }
+
+    private async Task EnsureClinicOwnerDoctorOrDeskAsync(Guid userId, Appointment appointment, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await EnsureClinicOwnerOrDoctorAsync(userId, appointment, cancellationToken);
+            return;
+        }
+        catch (DomainException)
+        {
+            // Fall through to desk coverage.
+        }
+
+        await clinicAccess.EnsureDoctorCoverageAsync(
+            userId,
+            appointment.ClinicId,
+            appointment.BranchId,
+            appointment.DoctorId,
+            cancellationToken);
     }
 
     private async Task EnsureCanReadInvoiceAsync(Guid userId, Invoice invoice, CancellationToken cancellationToken)

@@ -3,11 +3,14 @@ import { useMemo, useState } from 'react';
 import { View } from 'react-native';
 
 import { AuthScaffold } from '@/components/layout/auth-scaffold';
+import { ScreenHeader } from '@/components/layout/responsive-header';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { PhoneInput } from '@/components/ui/phone-input';
 import { AppText } from '@/components/ui/text';
 import { TextField } from '@/components/ui/text-field';
 import { useCopy } from '@/i18n/copy';
+import { indianMobileSchema } from '@/schemas/common';
 import {
   createOrganization,
   getOrganizationAnalytics,
@@ -32,9 +35,10 @@ import {
 } from '@/services/api/saas-api';
 import { getMyClinics } from '@/services/api/provider-api';
 import { refreshSession } from '@/services/api/client';
-import { persistSession, useSessionStore } from '@/stores/session-store';
+import { persistSession, useAccountPermissions, useSessionStore } from '@/stores/session-store';
 import { useProdocTheme } from '@/theme/prodoc-theme';
 import { spacing } from '@/theme/tokens';
+import { normalizeIndianMobile } from '@/utils/phone';
 import { problemMessage } from '@/utils/problem';
 
 function todayIso() {
@@ -51,7 +55,7 @@ export function OrganizationHub() {
   const copy = useCopy();
   const theme = useProdocTheme();
   const queryClient = useQueryClient();
-  const permissions = useSessionStore((state) => state.account?.permissions ?? []);
+  const permissions = useAccountPermissions();
   const canAccess = permissions.includes('org.access');
   const canCreate = permissions.includes('provider.onboard');
   const [orgName, setOrgName] = useState('');
@@ -159,11 +163,20 @@ export function OrganizationHub() {
   });
 
   const invite = useMutation({
-    mutationFn: () =>
-      inviteOrganizationMember(activeOrgId!, {
-        phoneNumber: invitePhone,
+    mutationFn: () => {
+      const parsed = indianMobileSchema.safeParse(invitePhone);
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues[0]?.message ?? 'Enter a valid Indian mobile number.');
+      }
+      const phoneNumber = normalizeIndianMobile(parsed.data);
+      if (!phoneNumber) {
+        throw new Error('Enter a valid Indian mobile number.');
+      }
+      return inviteOrganizationMember(activeOrgId!, {
+        phoneNumber,
         role: inviteRole,
-      }),
+      });
+    },
     onSuccess: async () => {
       setInvitePhone('');
       setError(null);
@@ -180,7 +193,7 @@ export function OrganizationHub() {
   return (
     <AuthScaffold>
       <View style={{ gap: spacing.md }}>
-        <AppText variant="title">{copy.orgTitle}</AppText>
+        <ScreenHeader title={copy.orgTitle} showBack />
         <AppText variant="muted">{copy.orgBody}</AppText>
 
         {canCreate ? (
@@ -230,7 +243,7 @@ export function OrganizationHub() {
             {permissions.includes('org.staff') ? (
               <Card>
                 <AppText variant="label">{copy.orgStaff}</AppText>
-                <TextField label={copy.phoneLabel} value={invitePhone} onChangeText={setInvitePhone} />
+                <PhoneInput label={copy.phoneLabel} value={invitePhone} onChangeText={setInvitePhone} />
                 <TextField label={copy.orgRole} value={inviteRole} onChangeText={setInviteRole} />
                 <Button label={copy.orgInvite} loading={invite.isPending} onPress={() => invite.mutate()} />
                 {(members.data ?? []).map((member) => (

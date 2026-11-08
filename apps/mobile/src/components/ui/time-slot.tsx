@@ -20,15 +20,27 @@ export function TimeSlot({
   const scale = useSharedValue(1);
   const animated = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
+  const borderColor = selected
+    ? theme.colors.primary
+    : disabled
+      ? theme.colors.error
+      : theme.colors.success;
+  const backgroundColor = selected
+    ? theme.colors.primary
+    : disabled
+      ? '#FDECEC'
+      : theme.colors.primaryLight;
+  const textColor = selected ? theme.colors.onPrimary : disabled ? theme.colors.error : theme.colors.primaryPressed;
+
   return (
-    <Animated.View style={[{ flexGrow: 1, flexBasis: '30%', minWidth: 96 }, animated]}>
+    <Animated.View style={[{ flexGrow: 1, flexBasis: '30%', maxWidth: '100%', minWidth: 88 }, animated]}>
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ selected, disabled }}
         disabled={disabled}
         onPress={onPress}
         onPressIn={() => {
-          if (!theme.reduceMotion) {
+          if (!theme.reduceMotion && !disabled) {
             scale.value = withTiming(0.97, { duration: duration.press });
           }
         }}
@@ -39,14 +51,14 @@ export function TimeSlot({
           minHeight: control.heightSm + 8,
           borderRadius: radius.md,
           borderWidth: 1.5,
-          borderColor: selected ? theme.colors.primary : theme.colors.border,
-          backgroundColor: selected ? theme.colors.primary : theme.colors.surface,
+          borderColor,
+          backgroundColor,
           alignItems: 'center',
           justifyContent: 'center',
           paddingHorizontal: spacing.md,
-          opacity: disabled ? 0.4 : 1,
+          opacity: disabled ? 0.7 : 1,
         }}>
-        <AppText variant="label" style={{ color: selected ? theme.colors.onPrimary : theme.colors.text }}>
+        <AppText variant="label" style={{ color: textColor }}>
           {label}
         </AppText>
       </Pressable>

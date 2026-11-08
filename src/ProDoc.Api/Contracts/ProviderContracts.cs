@@ -1,4 +1,5 @@
 using FluentValidation;
+using ProDoc.Api.Validation;
 
 namespace ProDoc.Api.Contracts;
 
@@ -35,7 +36,7 @@ public sealed class DoctorProfessionalRequest
 
     public string? Biography { get; set; }
 
-    public int? YearsOfExperience { get; set; }
+    public int YearsOfExperience { get; set; }
 
     public string[] Languages { get; set; } = [];
 
@@ -48,7 +49,9 @@ public sealed class DoctorProfessionalRequestValidator : AbstractValidator<Docto
     {
         RuleFor(request => request.DisplayName).MaximumLength(120);
         RuleFor(request => request.Biography).MaximumLength(2000);
-        RuleFor(request => request.YearsOfExperience).InclusiveBetween(0, 70).When(request => request.YearsOfExperience is not null);
+        RuleFor(request => request.YearsOfExperience)
+            .InclusiveBetween(0, 70)
+            .WithMessage("Years of experience must be a whole number between 0 and 70.");
         RuleFor(request => request.Languages).Must(languages => languages.Length <= 13);
         RuleFor(request => request.Expertise).Must(items => items.Length <= 8);
     }
@@ -172,8 +175,8 @@ public sealed class ClinicDetailsRequestValidator : AbstractValidator<ClinicDeta
         RuleFor(request => request.Type).MaximumLength(40);
         RuleFor(request => request.LegalName).MaximumLength(200);
         RuleFor(request => request.Description).MaximumLength(2000);
-        RuleFor(request => request.PhoneNumber).MaximumLength(20);
-        RuleFor(request => request.Email).MaximumLength(160);
+        RuleFor(request => request.PhoneNumber).MaximumLength(20).MustBeIndianMobileWhenPresent();
+        RuleFor(request => request.Email).MaximumLength(160).EmailAddress().When(request => !string.IsNullOrWhiteSpace(request.Email));
         RuleFor(request => request.Website).MaximumLength(200);
         RuleFor(request => request.RegistrationNumber).MaximumLength(40);
         RuleFor(request => request.RegistrationAuthority).MaximumLength(120);
@@ -189,15 +192,25 @@ public sealed class BranchRequest
 
     public string? AddressLine2 { get; set; }
 
+    public string? Landmark { get; set; }
+
+    public string? Locality { get; set; }
+
     public string City { get; set; } = string.Empty;
+
+    public string? District { get; set; }
 
     public string State { get; set; } = string.Empty;
 
     public string PostalCode { get; set; } = string.Empty;
 
+    public string? Country { get; set; }
+
     public decimal? Latitude { get; set; }
 
     public decimal? Longitude { get; set; }
+
+    public string? GooglePlaceId { get; set; }
 
     public string? PhoneNumber { get; set; }
 
@@ -211,10 +224,76 @@ public sealed class BranchRequestValidator : AbstractValidator<BranchRequest>
         RuleFor(request => request.Name).NotEmpty().MaximumLength(120);
         RuleFor(request => request.AddressLine).NotEmpty().MaximumLength(200);
         RuleFor(request => request.AddressLine2).MaximumLength(200);
+        RuleFor(request => request.Landmark).MaximumLength(160);
+        RuleFor(request => request.Locality).MaximumLength(120);
         RuleFor(request => request.City).NotEmpty().MaximumLength(80);
+        RuleFor(request => request.District).MaximumLength(80);
         RuleFor(request => request.State).NotEmpty().MaximumLength(80);
-        RuleFor(request => request.PostalCode).NotEmpty().MaximumLength(12);
-        RuleFor(request => request.PhoneNumber).MaximumLength(20);
+        RuleFor(request => request.PostalCode).NotEmpty().Matches(@"^\d{6}$").WithMessage("Enter a valid 6-digit PIN code.");
+        RuleFor(request => request.Country).MaximumLength(80);
+        RuleFor(request => request.GooglePlaceId).MaximumLength(256);
+        RuleFor(request => request.PhoneNumber).MaximumLength(20).MustBeIndianMobileWhenPresent();
+        RuleFor(request => request.Latitude)
+            .InclusiveBetween(-90, 90)
+            .When(request => request.Latitude is not null);
+        RuleFor(request => request.Longitude)
+            .InclusiveBetween(-180, 180)
+            .When(request => request.Longitude is not null);
+        RuleFor(request => request)
+            .Must(request => (request.Latitude is null) == (request.Longitude is null))
+            .WithMessage("Enter both latitude and longitude, or leave both empty.");
+    }
+}
+
+public sealed class PracticeLocationRequest
+{
+    public string AddressLine { get; set; } = string.Empty;
+
+    public string? AddressLine2 { get; set; }
+
+    public string? Landmark { get; set; }
+
+    public string? Locality { get; set; }
+
+    public string City { get; set; } = string.Empty;
+
+    public string? District { get; set; }
+
+    public string State { get; set; } = string.Empty;
+
+    public string PostalCode { get; set; } = string.Empty;
+
+    public string? Country { get; set; }
+
+    public decimal? Latitude { get; set; }
+
+    public decimal? Longitude { get; set; }
+
+    public string? GooglePlaceId { get; set; }
+
+    public bool ClearOverride { get; set; }
+}
+
+public sealed class PracticeLocationRequestValidator : AbstractValidator<PracticeLocationRequest>
+{
+    public PracticeLocationRequestValidator()
+    {
+        When(request => !request.ClearOverride, () =>
+        {
+            RuleFor(request => request.AddressLine).NotEmpty().MaximumLength(200);
+            RuleFor(request => request.AddressLine2).MaximumLength(200);
+            RuleFor(request => request.Landmark).MaximumLength(160);
+            RuleFor(request => request.Locality).MaximumLength(120);
+            RuleFor(request => request.City).NotEmpty().MaximumLength(80);
+            RuleFor(request => request.District).MaximumLength(80);
+            RuleFor(request => request.State).NotEmpty().MaximumLength(80);
+            RuleFor(request => request.PostalCode).NotEmpty().Matches(@"^\d{6}$");
+            RuleFor(request => request.Country).MaximumLength(80);
+            RuleFor(request => request.GooglePlaceId).MaximumLength(256);
+            RuleFor(request => request)
+                .Must(request => (request.Latitude is null) == (request.Longitude is null))
+                .WithMessage("Enter both latitude and longitude, or leave both empty.");
+        });
     }
 }
 
@@ -228,7 +307,7 @@ public sealed class CreateScheduleRequest
 
     public decimal ConsultationFee { get; set; }
 
-    public int SlotDurationMinutes { get; set; } = 15;
+    public int SlotDurationMinutes { get; set; } = 10;
 
     public int BufferMinutes { get; set; }
 }
@@ -253,6 +332,12 @@ public sealed class UpdateScheduleRequest
 
     public int? MaxPatients { get; set; }
 
+    /// <summary>TimedSlots or HourlyQueue. Omit to leave unchanged.</summary>
+    public string? BookingMode { get; set; }
+
+    /// <summary>Required when switching modes while future bookings exist.</summary>
+    public bool ConfirmBookingModeChange { get; set; }
+
     public DateOnly? EffectiveFrom { get; set; }
 
     public DateOnly? EffectiveTo { get; set; }
@@ -260,6 +345,8 @@ public sealed class UpdateScheduleRequest
     public string? TimeZoneId { get; set; }
 
     public bool RequiresApproval { get; set; }
+
+    public string? ExpectedRowVersion { get; set; }
 }
 
 public sealed class UpdateScheduleRequestValidator : AbstractValidator<UpdateScheduleRequest>
@@ -271,6 +358,11 @@ public sealed class UpdateScheduleRequestValidator : AbstractValidator<UpdateSch
         RuleFor(request => request.BufferMinutes).InclusiveBetween(0, 60);
         RuleFor(request => request.MaxPatients).InclusiveBetween(1, 200);
         RuleFor(request => request.TimeZoneId).MaximumLength(64);
+        RuleFor(request => request.BookingMode)
+            .Must(value => value is null
+                || value.Equals("TimedSlots", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("HourlyQueue", StringComparison.OrdinalIgnoreCase))
+            .WithMessage("Choose TimedSlots or HourlyQueue.");
     }
 }
 
@@ -281,6 +373,46 @@ public sealed class ExtraRequest
     public string StartsAt { get; set; } = string.Empty;
 
     public string EndsAt { get; set; } = string.Empty;
+
+    public string? ExpectedRowVersion { get; set; }
+}
+
+public sealed class DayWindowRequest
+{
+    public string StartsAt { get; set; } = string.Empty;
+
+    public string EndsAt { get; set; } = string.Empty;
+}
+
+public sealed class ReplaceDayOverrideRequest
+{
+    public DateOnly Date { get; set; }
+
+    public bool Available { get; set; } = true;
+
+    public string? UnavailableReason { get; set; }
+
+    public DayWindowRequest[] Windows { get; set; } = [];
+
+    public string? ExpectedRowVersion { get; set; }
+}
+
+public sealed class ResetDayOverrideRequest
+{
+    public DateOnly Date { get; set; }
+
+    public string? ExpectedRowVersion { get; set; }
+}
+
+public sealed class CopyDayScheduleRequest
+{
+    public DateOnly SourceDate { get; set; }
+
+    public DateOnly[] TargetDates { get; set; } = [];
+
+    public bool OverwriteExisting { get; set; }
+
+    public string? ExpectedRowVersion { get; set; }
 }
 
 public sealed class OperatingHoursRequest
@@ -307,6 +439,8 @@ public sealed class FacilityRequest
 public sealed class PeriodsRequest
 {
     public PeriodRequest[] Periods { get; set; } = [];
+
+    public string? ExpectedRowVersion { get; set; }
 }
 
 public sealed class PeriodRequest
@@ -337,6 +471,8 @@ public sealed class ClosureRequest
     public DateOnly Date { get; set; }
 
     public string? Reason { get; set; }
+
+    public string? ExpectedRowVersion { get; set; }
 }
 
 public sealed class ClosureRequestValidator : AbstractValidator<ClosureRequest>
@@ -350,6 +486,8 @@ public sealed class ClosureRequestValidator : AbstractValidator<ClosureRequest>
 public sealed class PublicationRequest
 {
     public bool IsPublished { get; set; }
+
+    public string? ExpectedRowVersion { get; set; }
 }
 
 public sealed class ReviewRequest

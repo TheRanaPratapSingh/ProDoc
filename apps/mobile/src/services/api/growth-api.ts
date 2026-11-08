@@ -22,9 +22,12 @@ async function withAuthRetry<T>(run: () => Promise<T>): Promise<T> {
 export type ReferralItem = {
   id: string;
   status: string;
+  displayStatus: string;
+  referredLabel: string;
   registeredAtUtc: string;
   convertedAtUtc: string | null;
   rewardedAtUtc: string | null;
+  rewardPointsCredited: number | null;
 };
 
 export type ReferralDashboard = {
@@ -54,6 +57,10 @@ export type RewardLedgerItem = {
 export type RewardWallet = {
   pointsBalance: number;
   creditBalanceInr: number;
+  pointsEarnedTotal: number;
+  pointsRedeemedTotal: number;
+  pointsPerInr: number;
+  redeemableCreditValueInr: number;
   history: RewardLedgerItem[];
 };
 
@@ -70,6 +77,10 @@ export type CouponDetails = {
   endsAtUtc: string;
   isActive: boolean;
   redemptionCount: number;
+  userRedemptionCount?: number;
+  alreadyUsed?: boolean;
+  eligibleForUser?: boolean;
+  eligibilityNote?: string | null;
 };
 
 export type CouponPreview = {
@@ -125,8 +136,33 @@ export function getRewardWallet() {
   return withAuthRetry(async () => (await api.get<RewardWallet>('/api/v1/growth/wallet')).data);
 }
 
-export function redeemRewardPoints(points: number) {
-  return withAuthRetry(async () => (await api.post<RewardWallet>('/api/v1/growth/wallet/redeem', { points })).data);
+export function redeemRewardPoints(points: number, idempotencyKey?: string) {
+  return withAuthRetry(
+    async () =>
+      (
+        await api.post<RewardWallet>('/api/v1/growth/wallet/redeem', {
+          points,
+          idempotencyKey: idempotencyKey || undefined,
+        })
+      ).data,
+  );
+}
+
+export function createAdminCoupon(input: {
+  code: string;
+  name: string;
+  discountType: string;
+  discountValue: number;
+  startsAtUtc: string;
+  endsAtUtc: string;
+  minBookingAmount?: number | null;
+  maxDiscountAmount?: number | null;
+  firstBookingOnly?: boolean;
+  newUserOnly?: boolean;
+  maxRedemptions?: number | null;
+  maxRedemptionsPerUser?: number | null;
+}) {
+  return withAuthRetry(async () => (await api.post<CouponDetails>('/api/v1/admin/growth/coupons', input)).data);
 }
 
 export function listGrowthCoupons() {

@@ -1,4 +1,5 @@
 using FluentValidation;
+using ProDoc.Api.Validation;
 using ProDoc.Application.Auth;
 
 namespace ProDoc.Api.Contracts;
@@ -6,13 +7,20 @@ namespace ProDoc.Api.Contracts;
 public sealed class RequestOtpRequest
 {
     public string PhoneNumber { get; set; } = string.Empty;
+
+    /// <summary>Login entry: "patient" (default) or "admin". Staff invites are resolved automatically.</summary>
+    public string? Purpose { get; set; }
 }
 
 public sealed class RequestOtpRequestValidator : AbstractValidator<RequestOtpRequest>
 {
     public RequestOtpRequestValidator()
     {
-        RuleFor(request => request.PhoneNumber).NotEmpty().MaximumLength(20);
+        RuleFor(request => request.PhoneNumber)
+            .NotEmpty()
+            .MaximumLength(20)
+            .MustBeIndianMobile();
+        RuleFor(request => request.Purpose).MaximumLength(32);
     }
 }
 
@@ -25,16 +33,25 @@ public sealed class VerifyOtpRequest
     public string? DeviceName { get; set; }
 
     public string? ReferralCode { get; set; }
+
+    public string? Purpose { get; set; }
 }
 
 public sealed class VerifyOtpRequestValidator : AbstractValidator<VerifyOtpRequest>
 {
     public VerifyOtpRequestValidator()
     {
-        RuleFor(request => request.PhoneNumber).NotEmpty().MaximumLength(20);
-        RuleFor(request => request.Code).NotEmpty().MaximumLength(10);
+        RuleFor(request => request.PhoneNumber)
+            .NotEmpty()
+            .MaximumLength(20)
+            .MustBeIndianMobile();
+        RuleFor(request => request.Code)
+            .NotEmpty()
+            .Matches(@"^\d{6}$")
+            .WithMessage("Enter the 6-digit code.");
         RuleFor(request => request.DeviceName).MaximumLength(80);
         RuleFor(request => request.ReferralCode).MaximumLength(16);
+        RuleFor(request => request.Purpose).MaximumLength(32);
     }
 }
 
@@ -69,6 +86,10 @@ public sealed class UpdateProfileRequest
     public string? FullName { get; set; }
 
     public string PreferredLanguage { get; set; } = "en";
+
+    public int? AgeYears { get; set; }
+
+    public string? Gender { get; set; }
 }
 
 public sealed class UpdateProfileRequestValidator : AbstractValidator<UpdateProfileRequest>
@@ -79,10 +100,52 @@ public sealed class UpdateProfileRequestValidator : AbstractValidator<UpdateProf
         RuleFor(request => request.PreferredLanguage)
             .Must(language => language is "en" or "hi")
             .WithMessage("Choose English or Hindi.");
+        RuleFor(request => request.AgeYears)
+            .InclusiveBetween(1, 120)
+            .When(request => request.AgeYears is not null)
+            .WithMessage("Please enter a valid age.");
+        RuleFor(request => request.Gender)
+            .Must(gender => gender is null or "" or "male" or "female" or "other")
+            .WithMessage("Choose Male, Female, or Other.");
     }
 }
 
-public sealed record OtpRequestedResponse(Guid ChallengeId, DateTimeOffset ExpiresAtUtc, string? DevelopmentCode);
+public sealed class CompletePatientProfileRequest
+{
+    public string FullName { get; set; } = string.Empty;
+
+    public int AgeYears { get; set; }
+
+    public string? Gender { get; set; }
+
+    public string PreferredLanguage { get; set; } = "en";
+}
+
+public sealed class CompletePatientProfileRequestValidator : AbstractValidator<CompletePatientProfileRequest>
+{
+    public CompletePatientProfileRequestValidator()
+    {
+        RuleFor(request => request.FullName)
+            .NotEmpty()
+            .WithMessage("Name is mandatory.")
+            .MaximumLength(80);
+        RuleFor(request => request.AgeYears)
+            .InclusiveBetween(1, 120)
+            .WithMessage("Please enter a valid age.");
+        RuleFor(request => request.Gender)
+            .Must(gender => gender is null or "" or "male" or "female" or "other")
+            .WithMessage("Choose Male, Female, or Other.");
+        RuleFor(request => request.PreferredLanguage)
+            .Must(language => language is "en" or "hi")
+            .WithMessage("Choose English or Hindi.");
+    }
+}
+
+public sealed record OtpRequestedResponse(
+    Guid ChallengeId,
+    DateTimeOffset ExpiresAtUtc,
+    string? DevelopmentCode,
+    string Purpose);
 
 public sealed record AccountResponse(
     Guid UserId,
@@ -91,7 +154,12 @@ public sealed record AccountResponse(
     string PreferredLanguage,
     IReadOnlyList<string> Roles,
     IReadOnlyList<string> Permissions,
-    DateTimeOffset? DeletionRequestedAtUtc)
+    DateTimeOffset? DeletionRequestedAtUtc,
+    string HomeSurface,
+    IReadOnlyList<string> AvailableSurfaces,
+    int? AgeYears,
+    string? Gender,
+    bool ProfileCompleted)
 {
     public static AccountResponse From(AccountSnapshot account) => new(
         account.UserId,
@@ -100,7 +168,13 @@ public sealed record AccountResponse(
         account.PreferredLanguage,
         account.Roles,
         account.Permissions,
-        account.DeletionRequestedAtUtc);
+        account.DeletionRequestedAtUtc,
+        account.HomeSurface,
+        account.AvailableSurfaces
+            ?? ProDoc.Domain.Identity.DashboardResolver.ListSurfaces(account.Roles),
+        account.AgeYears,
+        account.Gender,
+        account.ProfileCompleted);
 }
 
 public sealed record AuthSessionResponse(

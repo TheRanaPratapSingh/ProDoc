@@ -22,7 +22,25 @@ public interface IAuthStore
         DateTimeOffset now,
         CancellationToken cancellationToken);
 
-    Task UpdatePatientProfileAsync(Guid userId, string? fullName, string preferredLanguage, DateTimeOffset now, CancellationToken cancellationToken);
+    Task GrantRoleAsync(Guid userId, string roleName, CancellationToken cancellationToken);
+
+    Task UpdatePatientProfileAsync(
+        Guid userId,
+        string? fullName,
+        string preferredLanguage,
+        DateTimeOffset now,
+        CancellationToken cancellationToken,
+        int? ageYears = null,
+        string? gender = null);
+
+    Task CompletePatientProfileAsync(
+        Guid userId,
+        string fullName,
+        int ageYears,
+        string? gender,
+        string preferredLanguage,
+        DateTimeOffset now,
+        CancellationToken cancellationToken);
 
     Task MarkDeletionRequestedAsync(Guid userId, DateTimeOffset now, CancellationToken cancellationToken);
 

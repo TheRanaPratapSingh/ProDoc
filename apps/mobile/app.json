@@ -6,10 +6,27 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "prodoc",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#285849",
+    "androidStatusBar": {
+      "backgroundColor": "#285849",
+      "barStyle": "light-content",
+      "translucent": false
+    },
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#285849"
+    },
     "ios": {
       "icon": "./assets/expo.icon",
       "supportsTablet": true,
+      "backgroundColor": "#285849",
+      "splash": {
+        "image": "./assets/images/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#285849"
+      },
       "infoPlist": {
         "UIBackgroundModes": ["remote-notification"],
         "NSAppTransportSecurity": {
@@ -20,6 +37,12 @@
     },
     "android": {
       "usesCleartextTraffic": true,
+      "backgroundColor": "#285849",
+      "splash": {
+        "image": "./assets/images/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#285849"
+      },
       "adaptiveIcon": {
         "backgroundColor": "#356F5E",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -42,16 +65,23 @@
     },
     "web": {
       "output": "single",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/favicon.png",
+      "backgroundColor": "#285849",
+      "splash": {
+        "image": "./assets/images/splash-icon.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#285849"
+      }
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#356F5E",
+          "backgroundColor": "#285849",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 180,
+          "resizeMode": "contain"
         }
       ],
       "expo-secure-store",

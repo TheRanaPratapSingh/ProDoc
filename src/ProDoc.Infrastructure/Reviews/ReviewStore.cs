@@ -49,6 +49,26 @@ public sealed class ReviewStore(ProDocDbContext db) : IReviewStore
         return clinic?.Name;
     }
 
+    public async Task<string?> FindAppointmentPatientNameAsync(Guid appointmentId, CancellationToken cancellationToken) =>
+        await db.Appointments.AsNoTracking()
+            .Where(item => item.Id == appointmentId)
+            .Select(item => item.PatientName)
+            .SingleOrDefaultAsync(cancellationToken);
+
+    public async Task<DateTimeOffset?> FindAppointmentCompletedAtAsync(Guid appointmentId, CancellationToken cancellationToken) =>
+        await db.Appointments.AsNoTracking()
+            .Where(item => item.Id == appointmentId && item.Status == AppointmentStatus.Completed)
+            .Select(item => (DateTimeOffset?)item.UpdatedAtUtc)
+            .SingleOrDefaultAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<PatientReview>> ListForAuthorAsync(Guid authorUserId, int take, CancellationToken cancellationToken) =>
+        await db.PatientReviews.AsNoTracking()
+            .Include(item => item.Responses)
+            .Where(item => item.AuthorUserId == authorUserId && item.Status != ReviewStatus.Removed)
+            .OrderByDescending(item => item.CreatedAtUtc)
+            .Take(Math.Clamp(take, 1, 100))
+            .ToListAsync(cancellationToken);
+
     public Task<PatientReview?> FindReviewAsync(Guid reviewId, bool tracking, CancellationToken cancellationToken)
     {
         var query = tracking ? db.PatientReviews.AsQueryable() : db.PatientReviews.AsNoTracking();
@@ -61,7 +81,23 @@ public sealed class ReviewStore(ProDocDbContext db) : IReviewStore
 
     public Task<PatientReview?> FindReviewByAppointmentTargetAsync(Guid appointmentId, ReviewTargetKind targetKind, CancellationToken cancellationToken) =>
         db.PatientReviews.AsNoTracking()
-            .SingleOrDefaultAsync(item => item.AppointmentId == appointmentId && item.TargetKind == targetKind, cancellationToken);
+            .SingleOrDefaultAsync(
+                item => item.AppointmentId == appointmentId
+                    && item.TargetKind == targetKind
+                    && item.Status != ReviewStatus.Removed,
+                cancellationToken);
+
+    public Task<PatientReview?> FindAnyReviewByAppointmentTargetAsync(
+        Guid appointmentId,
+        ReviewTargetKind targetKind,
+        bool tracking,
+        CancellationToken cancellationToken)
+    {
+        var query = tracking ? db.PatientReviews.AsQueryable() : db.PatientReviews.AsNoTracking();
+        return query.SingleOrDefaultAsync(
+            item => item.AppointmentId == appointmentId && item.TargetKind == targetKind,
+            cancellationToken);
+    }
 
     public async Task<IReadOnlyList<PatientReview>> ListPublishedForDoctorAsync(Guid doctorId, int skip, int take, CancellationToken cancellationToken) =>
         await db.PatientReviews.AsNoTracking()

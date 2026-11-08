@@ -30,6 +30,29 @@ public sealed class SupportHubController(SupportService support) : ControllerBas
     public Task<HelpArticleDetails> GetHelp(string slugOrId, CancellationToken cancellationToken) =>
         support.GetHelpArticleAsync(slugOrId, allowUnpublished: false, cancellationToken);
 
+    [HttpPost("help/articles/{slugOrId}/feedback")]
+    [AllowAnonymous]
+    public Task<HelpArticleFeedbackResult> ArticleFeedback(
+        string slugOrId,
+        HelpArticleFeedbackRequest request,
+        CancellationToken cancellationToken)
+    {
+        Guid? userId = null;
+        if (User.Identity?.IsAuthenticated == true)
+        {
+            try
+            {
+                userId = User.GetUserId();
+            }
+            catch
+            {
+                userId = null;
+            }
+        }
+
+        return support.SubmitArticleFeedbackAsync(userId, slugOrId, request.WasHelpful, cancellationToken);
+    }
+
     [Authorize]
     [HasPermission(PermissionCodes.AdminSupport)]
     [HttpGet("admin/help/articles")]
@@ -181,3 +204,5 @@ public sealed record DisputeActionRequest(
     string? Decision,
     string? DecisionNotes,
     decimal? RefundAmount);
+
+public sealed record HelpArticleFeedbackRequest(bool WasHelpful);

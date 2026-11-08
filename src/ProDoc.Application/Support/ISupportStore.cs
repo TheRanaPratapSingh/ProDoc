@@ -23,6 +23,12 @@ public interface ISupportStore
 
     void AddArticle(HelpArticle article);
 
+    void AddArticleFeedback(HelpArticleFeedback feedback);
+
+    Task<IReadOnlyList<Guid>> ListPlatformAdminUserIdsAsync(CancellationToken cancellationToken);
+
+    Task<bool> HasRecentSimilarTicketAsync(Guid userId, string subject, DateTimeOffset sinceUtc, CancellationToken cancellationToken);
+
     Task<SupportTicket?> FindTicketAsync(Guid ticketId, bool tracking, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<SupportTicket>> QueryTicketsAsync(
